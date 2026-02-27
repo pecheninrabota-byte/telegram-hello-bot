@@ -1,0 +1,176 @@
+2026-02-25 13:43:53 | starting bot...
+2026-02-25 13:43:53 | started bot pid=337
+Sheets: connected ✅ (worksheet: logs)
+Bot started...
+2026-02-25 13:53:07 | stopping old bot pid=337
+2026-02-25 13:53:08 | starting bot...
+2026-02-25 13:53:08 | started bot pid=4425
+Sheets: connected ✅ (worksheet: logs)
+Bot started...
+2026-02-25 14:13:43 | stopping old bot pid=4425
+2026-02-25 14:13:44 | starting bot...
+2026-02-25 14:13:44 | started bot pid=11805
+Sheets: connected ✅ (worksheet: logs)
+Bot started...
+2026-02-25 14:27:48 | stopping old bot pid=11805
+2026-02-25 14:27:49 | starting bot...
+2026-02-25 14:27:49 | started bot pid=16722
+Sheets: connected ✅ (worksheet: logs)
+Bot started...
+2026-02-26 06:11:02 | starting bot...
+2026-02-26 06:11:02 | started bot pid=97
+Sheets: connected ✅ (worksheet: logs)
+Bot started...
+2026-02-26 06:34:33 | stopping old bot pid=97
+2026-02-26 06:34:34 | starting bot...
+2026-02-26 06:34:34 | started bot pid=9222
+Sheets: connected ✅ (worksheet: logs)
+Bot started...
+2026-02-26 06:53:00 | stopping old bot pid=9222
+2026-02-26 06:53:01 | starting bot...
+2026-02-26 06:53:01 | started bot pid=15566
+Sheets: connected ✅ (worksheet: logs)
+Bot started...
+2026-02-26 07:00:15 | stopping old bot pid=15566
+2026-02-26 07:00:16 | starting bot...
+2026-02-26 07:00:16 | started bot pid=18075
+Sheets connected ✅ (logs)
+Bot started...
+2026-02-26 07:07:50 | stopping old bot pid=18075
+2026-02-26 07:07:51 | starting bot...
+2026-02-26 07:07:51 | started bot pid=20778
+Sheets connected ✅ (logs)
+Bot started...
+2026-02-26 07:17:26 | stopping old bot pid=20778
+2026-02-26 07:17:27 | starting bot...
+2026-02-26 07:17:27 | started bot pid=24139
+Sheets connected ✅ (logs)
+Bot started...
+2026-02-26 07:18:11 | stopping old bot pid=24139
+2026-02-26 07:18:12 | starting bot...
+2026-02-26 07:18:12 | started bot pid=24453
+Sheets connected ✅ (logs)
+Bot started...
+2026-02-26 07:40:13 | stopping old bot pid=24453
+2026-02-26 07:40:14 | starting bot...
+2026-02-26 07:40:14 | started bot pid=31928
+Sheets connected ✅ (Сотрудники)
+Bot started...
+2026-02-26 07:42:12,636 (__init__.py:1115 MainThread) ERROR - TeleBot: "Infinity polling exception: APIError: [429]: Quota exceeded for quota metric 'Read requests' and limit 'Read requests per minute per user' of service 'sheets.googleapis.com' for consumer 'project_number:664126642704'."
+2026-02-26 07:42:12,637 (__init__.py:1117 MainThread) ERROR - TeleBot: "Exception traceback:
+Traceback (most recent call last):
+  File "/workspaces/telegram-hello-bot/bot.py", line 118, in get_or_create_user_row
+    cell = ws.find(tid, in_column=COL_TELEGRAM_ID)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/worksheet.py", line 2332, in find
+    return next(self._finder(filter, query, case_sensitive, in_row, in_column))
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/worksheet.py", line 2249, in _finder
+    data = self.client.values_get(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/http_client.py", line 236, in values_get
+    r = self.request("get", url, params=params)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/http_client.py", line 128, in request
+    raise APIError(response)
+gspread.exceptions.APIError: APIError: [429]: Quota exceeded for quota metric 'Read requests' and limit 'Read requests per minute per user' of service 'sheets.googleapis.com' for consumer 'project_number:664126642704'.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/__init__.py", line 1110, in infinity_polling
+    self.polling(non_stop=True, timeout=timeout, long_polling_timeout=long_polling_timeout,
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/__init__.py", line 1198, in polling
+    self.__threaded_polling(non_stop=non_stop, interval=interval, timeout=timeout, long_polling_timeout=long_polling_timeout,
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/__init__.py", line 1273, in __threaded_polling
+    raise e
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/__init__.py", line 1235, in __threaded_polling
+    self.worker_pool.raise_exceptions()
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/util.py", line 154, in raise_exceptions
+    raise self.exception_info
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/util.py", line 97, in run
+    task(*args, **kwargs)
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/__init__.py", line 10427, in _run_middlewares_and_handler
+    result = handler['function'](message)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/telegram-hello-bot/bot.py", line 439, in handle_message
+    append_log(chat_id, "question_category_selected", {"cat": cat})
+  File "/workspaces/telegram-hello-bot/bot.py", line 151, in append_log
+    row = get_or_create_user_row(chat_id)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/telegram-hello-bot/bot.py", line 142, in get_or_create_user_row
+    cell = ws.find(tid, in_column=COL_TELEGRAM_ID)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/worksheet.py", line 2332, in find
+    return next(self._finder(filter, query, case_sensitive, in_row, in_column))
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/worksheet.py", line 2249, in _finder
+    data = self.client.values_get(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/http_client.py", line 236, in values_get
+    r = self.request("get", url, params=params)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/http_client.py", line 128, in request
+    raise APIError(response)
+gspread.exceptions.APIError: APIError: [429]: Quota exceeded for quota metric 'Read requests' and limit 'Read requests per minute per user' of service 'sheets.googleapis.com' for consumer 'project_number:664126642704'.
+"
+2026-02-26 07:42:15,638 (__init__.py:1115 MainThread) ERROR - TeleBot: "Infinity polling exception: APIError: [429]: Quota exceeded for quota metric 'Read requests' and limit 'Read requests per minute per user' of service 'sheets.googleapis.com' for consumer 'project_number:664126642704'."
+2026-02-26 07:42:15,641 (__init__.py:1117 MainThread) ERROR - TeleBot: "Exception traceback:
+Traceback (most recent call last):
+  File "/workspaces/telegram-hello-bot/bot.py", line 118, in get_or_create_user_row
+    cell = ws.find(tid, in_column=COL_TELEGRAM_ID)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/worksheet.py", line 2332, in find
+    return next(self._finder(filter, query, case_sensitive, in_row, in_column))
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/worksheet.py", line 2249, in _finder
+    data = self.client.values_get(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/http_client.py", line 236, in values_get
+    r = self.request("get", url, params=params)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/http_client.py", line 128, in request
+    raise APIError(response)
+gspread.exceptions.APIError: APIError: [429]: Quota exceeded for quota metric 'Read requests' and limit 'Read requests per minute per user' of service 'sheets.googleapis.com' for consumer 'project_number:664126642704'.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/__init__.py", line 1110, in infinity_polling
+    self.polling(non_stop=True, timeout=timeout, long_polling_timeout=long_polling_timeout,
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/__init__.py", line 1198, in polling
+    self.__threaded_polling(non_stop=non_stop, interval=interval, timeout=timeout, long_polling_timeout=long_polling_timeout,
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/__init__.py", line 1273, in __threaded_polling
+    raise e
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/__init__.py", line 1235, in __threaded_polling
+    self.worker_pool.raise_exceptions()
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/util.py", line 154, in raise_exceptions
+    raise self.exception_info
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/util.py", line 97, in run
+    task(*args, **kwargs)
+  File "/home/vscode/.local/lib/python3.12/site-packages/telebot/__init__.py", line 10427, in _run_middlewares_and_handler
+    result = handler['function'](message)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/telegram-hello-bot/bot.py", line 356, in handle_message
+    _ = get_or_create_user_row(chat_id)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/telegram-hello-bot/bot.py", line 142, in get_or_create_user_row
+    cell = ws.find(tid, in_column=COL_TELEGRAM_ID)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/worksheet.py", line 2332, in find
+    return next(self._finder(filter, query, case_sensitive, in_row, in_column))
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/worksheet.py", line 2249, in _finder
+    data = self.client.values_get(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/http_client.py", line 236, in values_get
+    r = self.request("get", url, params=params)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.12/site-packages/gspread/http_client.py", line 128, in request
+    raise APIError(response)
+gspread.exceptions.APIError: APIError: [429]: Quota exceeded for quota metric 'Read requests' and limit 'Read requests per minute per user' of service 'sheets.googleapis.com' for consumer 'project_number:664126642704'.
+"
+2026-02-26 08:46:59 | starting bot...
+2026-02-26 08:46:59 | started bot pid=97
+Sheets connected ✅ (Сотрудники)
+Bot started...

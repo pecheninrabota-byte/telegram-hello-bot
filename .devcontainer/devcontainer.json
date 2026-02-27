@@ -1,5 +1,6 @@
 {
   "name": "telegram-hello-bot",
-  "postCreateCommand": "pip install -r requirements.txt",
-  "postStartCommand": "python bot.py"
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "postCreateCommand": "python -m ensurepip --upgrade && python -m pip install --upgrade pip && python -m pip install -r requirements.txt",
+  "postStartCommand": "bash -lc './start_bot.sh'"
 }

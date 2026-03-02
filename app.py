@@ -1,13 +1,11 @@
 import os
-import json
 from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 
-# ВАЖНО: импортируем твой существующий bot.py
-# В bot.py должен быть создан объект telebot.TeleBot(...), обычно переменная называется bot
+# импортируем твой bot.py
 import bot as bot_module
 
-# Пытаемся достать объект TeleBot из bot.py
+# достаем объект TeleBot из bot.py
 tg_bot = getattr(bot_module, "bot", None)
 if tg_bot is None:
     raise RuntimeError(
@@ -15,14 +13,20 @@ if tg_bot is None:
     )
 
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
-# Telegram будет присылать этот заголовок, если мы установим secret_token в setWebhook
 SECRET_HEADER_NAME = "X-Telegram-Bot-Api-Secret-Token"
 
 app = FastAPI()
 
 
+# Railway health-check (корень)
+@app.get("/")
+async def root_health():
+    return {"status": "ok"}
+
+
+# дополнительный health (можно оставить, полезно для ручной проверки)
 @app.get("/health", response_class=PlainTextResponse)
-async def health():
+async def health_text():
     return "ok"
 
 
@@ -33,16 +37,14 @@ async def telegram_webhook(
 ):
     # 1) Проверяем секрет (если задан)
     if WEBHOOK_SECRET:
-        if not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
+        if (not x_telegram_bot_api_secret_token) or (x_telegram_bot_api_secret_token != WEBHOOK_SECRET):
             raise HTTPException(status_code=401, detail="Invalid webhook secret")
 
     # 2) Забираем update от Telegram
     data = await request.json()
 
     # 3) Передаём update в telebot
-    # pyTelegramBotAPI ожидает Update объект, но умеет и через types.Update.de_json
     from telebot import types
-
     update = types.Update.de_json(data)
     tg_bot.process_new_updates([update])
 

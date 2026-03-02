@@ -24,16 +24,23 @@ bot = telebot.TeleBot(TOKEN)
 # ----------------------------
 SHEET_ID = os.environ.get("SHEET_ID")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-WORKSHEET_NAME = os.environ.get("WORKSHEET_NAME")  # желательно: "Сотрудники"
+WORKSHEET_NAME = os.environ.get("WORKSHEET_NAME")  # например: "Сотрудники"
 
 ws = None  # worksheet
+
+# Если таблицы недоступны — используем память (чтобы бот не "тупил" без Sheets)
+MEMORY_STATE: dict[int, dict] = {}
+
+
+def _now_str():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def init_sheets():
     global ws
 
     if not SHEET_ID or not GOOGLE_CREDENTIALS_JSON:
-        print("Sheets: secrets not set. (SHEET_ID/GOOGLE_CREDENTIALS_JSON missing)")
+        print("Sheets: secrets not set -> using memory state.")
         ws = None
         return
 
@@ -44,48 +51,26 @@ def init_sheets():
         ws = None
         return
 
-    try:
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        gc = gspread.authorize(creds)
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    gc = gspread.authorize(creds)
 
-        sh = gc.open_by_key(SHEET_ID)
+    sh = gc.open_by_key(SHEET_ID)
 
-        if WORKSHEET_NAME:
-            ws = sh.worksheet(WORKSHEET_NAME)
-        else:
-            ws = sh.get_worksheet(0)
+    if WORKSHEET_NAME:
+        ws = sh.worksheet(WORKSHEET_NAME)
+    else:
+        ws = sh.get_worksheet(0)
 
-        print(f"Sheets connected ✅ ({ws.title})")
-    except Exception as e:
-        print("Sheets connection failed:", e)
-        ws = None
+    print(f"Sheets connected ✅ ({ws.title})")
 
 
-def _ensure_ws() -> bool:
+def _ensure_ws():
     return ws is not None
-
-
-def _now_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ----------------------------
 # Columns (новая структура)
-# A telegram_id
-# B ФИО
-# C Должность
-# D Уровень
-# E Дата выхода
-# F Окончание ИС
-# G Статус
-# H Этап адаптации
-# I Шаг диалога
-# J Категория вопроса
-# K Цели ИС
-# L Текущие задачи
-# M Последняя активность
-# N Логи
 # ----------------------------
 COL_TELEGRAM_ID = 1
 COL_FIO = 2
@@ -103,16 +88,34 @@ COL_LAST_ACTIVE = 13
 COL_LOGS = 14
 
 
-# ----------------------------
-# Fallback memory (если Sheets временно недоступны)
-# ----------------------------
-MEM_DIALOG_STEP = {}
-MEM_QUESTION_CAT = {}
+def _mem(chat_id: int) -> dict:
+    st = MEMORY_STATE.get(chat_id)
+    if not st:
+        st = {
+            "fio": "",
+            "status": "Новый",
+            "stage": "",
+            "dialog_step": "idle",
+            "question_cat": "",
+            "last_active": _now_str(),
+            "logs": "",
+        }
+        MEMORY_STATE[chat_id] = st
+    return st
+
+
+def _touch_last_active(chat_id: int):
+    if _ensure_ws():
+        row = get_or_create_user_row(chat_id)
+        if row:
+            ws.update_cell(row, COL_LAST_ACTIVE, _now_str())
+    else:
+        _mem(chat_id)["last_active"] = _now_str()
 
 
 def get_or_create_user_row(chat_id: int) -> int:
-    """Находит строку пользователя по telegram_id (A). Если нет — создаёт."""
     if not _ensure_ws():
+        _mem(chat_id)
         return 0
 
     tid = str(chat_id)
@@ -120,7 +123,6 @@ def get_or_create_user_row(chat_id: int) -> int:
         cell = ws.find(tid, in_column=COL_TELEGRAM_ID)
         return cell.row
     except Exception:
-        # Создаём новую строку A..N
         ws.append_row(
             [
                 tid,            # A telegram_id
@@ -140,41 +142,12 @@ def get_or_create_user_row(chat_id: int) -> int:
             ],
             value_input_option="USER_ENTERED",
         )
-        try:
-            cell = ws.find(tid, in_column=COL_TELEGRAM_ID)
-            return cell.row
-        except Exception:
-            return 0
-
-
-def _touch_last_active(chat_id: int):
-    if not _ensure_ws():
-        return
-    row = get_or_create_user_row(chat_id)
-    if not row:
-        return
-    try:
-        ws.update_cell(row, COL_LAST_ACTIVE, _now_str())
-    except Exception as e:
-        print("touch_last_active failed:", e)
+        cell = ws.find(tid, in_column=COL_TELEGRAM_ID)
+        return cell.row
 
 
 def append_log(chat_id: int, event: str, payload: dict | None = None):
-    """Добавляет строку лога в колонку N (Логи) в строке пользователя."""
-    if not _ensure_ws():
-        return
-
-    row = get_or_create_user_row(chat_id)
-    if not row:
-        return
-
     _touch_last_active(chat_id)
-
-    try:
-        current = ws.cell(row, COL_LOGS).value or ""
-    except Exception as e:
-        print("read logs failed:", e)
-        return
 
     payload_str = ""
     if payload:
@@ -185,44 +158,66 @@ def append_log(chat_id: int, event: str, payload: dict | None = None):
 
     line = f"[{_now_str()}] {event}{payload_str}"
 
-    if current.strip():
-        new_val = current.rstrip() + "\n" + line
-    else:
-        new_val = line
-
-    if len(new_val) > 45000:
-        new_val = new_val[-45000:]
-
-    try:
+    if _ensure_ws():
+        row = get_or_create_user_row(chat_id)
+        if not row:
+            return
+        current = ws.cell(row, COL_LOGS).value or ""
+        new_val = (current.rstrip() + "\n" + line) if current.strip() else line
+        if len(new_val) > 45000:
+            new_val = new_val[-45000:]
         ws.update_cell(row, COL_LOGS, new_val)
-    except Exception as e:
-        print("update logs failed:", e)
+    else:
+        cur = _mem(chat_id).get("logs", "")
+        new_val = (cur.rstrip() + "\n" + line) if cur.strip() else line
+        if len(new_val) > 45000:
+            new_val = new_val[-45000:]
+        _mem(chat_id)["logs"] = new_val
 
 
 def set_cell(chat_id: int, col: int, value: str):
-    if not _ensure_ws():
-        return
-    row = get_or_create_user_row(chat_id)
-    if not row:
-        return
-    try:
+    _touch_last_active(chat_id)
+
+    if _ensure_ws():
+        row = get_or_create_user_row(chat_id)
+        if not row:
+            return
         ws.update_cell(row, col, value)
-        _touch_last_active(chat_id)
-    except Exception as e:
-        print("set_cell failed:", e)
+    else:
+        st = _mem(chat_id)
+        if col == COL_FIO:
+            st["fio"] = value
+        elif col == COL_STATUS:
+            st["status"] = value
+        elif col == COL_STAGE:
+            st["stage"] = value
+        elif col == COL_DIALOG_STEP:
+            st["dialog_step"] = value
+        elif col == COL_QUESTION_CAT:
+            st["question_cat"] = value
+        elif col == COL_LAST_ACTIVE:
+            st["last_active"] = value
 
 
 def get_cell(chat_id: int, col: int) -> str:
-    if not _ensure_ws():
-        return ""
-    row = get_or_create_user_row(chat_id)
-    if not row:
-        return ""
-    try:
+    if _ensure_ws():
+        row = get_or_create_user_row(chat_id)
+        if not row:
+            return ""
         return (ws.cell(row, col).value or "").strip()
-    except Exception as e:
-        print("get_cell failed:", e)
-        return ""
+
+    st = _mem(chat_id)
+    if col == COL_FIO:
+        return (st.get("fio") or "").strip()
+    if col == COL_STATUS:
+        return (st.get("status") or "").strip()
+    if col == COL_STAGE:
+        return (st.get("stage") or "").strip()
+    if col == COL_DIALOG_STEP:
+        return (st.get("dialog_step") or "").strip()
+    if col == COL_QUESTION_CAT:
+        return (st.get("question_cat") or "").strip()
+    return ""
 
 
 def set_status(chat_id: int, status: str):
@@ -230,7 +225,7 @@ def set_status(chat_id: int, status: str):
 
 
 def get_status(chat_id: int) -> str:
-    return get_cell(chat_id, COL_STATUS)
+    return get_cell(chat_id, COL_STATUS) or "Новый"
 
 
 def set_stage(chat_id: int, stage: str):
@@ -241,34 +236,25 @@ def get_stage(chat_id: int) -> str:
     return get_cell(chat_id, COL_STAGE)
 
 
-# ---- ВАЖНО: step/cat с fallback в память ----
 def set_dialog_step(chat_id: int, step: str):
-    MEM_DIALOG_STEP[chat_id] = step
     set_cell(chat_id, COL_DIALOG_STEP, step)
 
 
 def get_dialog_step(chat_id: int) -> str:
     v = get_cell(chat_id, COL_DIALOG_STEP)
-    if v:
-        return v
-    return MEM_DIALOG_STEP.get(chat_id, "idle")
+    return v if v else "idle"
 
 
 def set_question_cat(chat_id: int, cat: str):
-    MEM_QUESTION_CAT[chat_id] = cat
     set_cell(chat_id, COL_QUESTION_CAT, cat)
 
 
 def get_question_cat(chat_id: int) -> str:
     v = get_cell(chat_id, COL_QUESTION_CAT)
-    if v:
-        return v
-    return MEM_QUESTION_CAT.get(chat_id, "unknown")
+    return v if v else "unknown"
 
 
 def reset_dialog(chat_id: int):
-    MEM_DIALOG_STEP[chat_id] = "idle"
-    MEM_QUESTION_CAT[chat_id] = ""
     set_dialog_step(chat_id, "idle")
     set_question_cat(chat_id, "")
 
@@ -315,14 +301,11 @@ def question_category_menu():
 @bot.message_handler(commands=["start"])
 def start_cmd(message):
     chat_id = message.chat.id
-
-    # гарантируем строку (если Sheets включены)
     _ = get_or_create_user_row(chat_id)
 
     step = get_dialog_step(chat_id)
     status = get_status(chat_id)
 
-    # resume диалога
     if step == "wait_name":
         bot.send_message(chat_id, "Продолжим 🙂 Напиши, пожалуйста, своё ФИО:")
         append_log(chat_id, "resume", {"step": "wait_name"})
@@ -338,7 +321,6 @@ def start_cmd(message):
         append_log(chat_id, "resume", {"step": "wait_question", "cat": get_question_cat(chat_id)})
         return
 
-    # стандартное поведение
     if status in ["Проходит адаптацию", "Адаптация начата"]:
         bot.send_message(chat_id, "Продолжим адаптацию 👇", reply_markup=adaptation_menu())
         append_log(chat_id, "start", {"status": status})
@@ -379,7 +361,7 @@ def help_cmd(message):
 @bot.message_handler(commands=["status"])
 def status_cmd(message):
     chat_id = message.chat.id
-    bot.send_message(chat_id, f"✅ Я онлайн. Sheets: {'OK' if ws else 'OFF'}")
+    bot.send_message(chat_id, "✅ Я онлайн и работаю.")
     append_log(chat_id, "status")
 
 
@@ -391,23 +373,37 @@ def handle_message(message):
     chat_id = message.chat.id
     text = (message.text or "").strip()
 
-    # ensure row + last active (если Sheets доступны)
     _ = get_or_create_user_row(chat_id)
     _touch_last_active(chat_id)
 
-    step = get_dialog_step(chat_id)
-
-    # universal back
     if text == "⬅️ Назад":
         reset_dialog(chat_id)
         bot.send_message(chat_id, "Главное меню:", reply_markup=main_menu())
         append_log(chat_id, "back_to_menu")
         return
 
-    # ----------------------------
-    # 1) Если мы ждём ФИО — принимаем ЛЮБОЙ текст (кроме системных кнопок)
-    # ----------------------------
-    if step == "wait_name":
+    if text in ["✅ План на 1-й день", "📅 План на 1-ю неделю", "🎯 План на 1 месяц", "🧾 Документы / доступы (чеклист)"]:
+        bot.send_message(chat_id, f"{text}\n\nКонтент будет доработан позже.")
+        append_log(chat_id, "open_adaptation_section", {"section": text})
+
+        if text == "✅ План на 1-й день":
+            set_stage(chat_id, "День 1")
+        elif text == "📅 План на 1-ю неделю":
+            set_stage(chat_id, "Неделя 1")
+        elif text == "🎯 План на 1 месяц":
+            set_stage(chat_id, "Месяц 1")
+
+        return
+
+    if text == "📌 Адаптация":
+        set_dialog_step(chat_id, "wait_name")
+        bot.send_message(chat_id, "Напиши, пожалуйста, своё ФИО:")
+        append_log(chat_id, "adaptation_start")
+        set_status(chat_id, "Проходит адаптацию")
+        set_stage(chat_id, "День 1")
+        return
+
+    if get_dialog_step(chat_id) == "wait_name":
         fio = text
         set_dialog_step(chat_id, "idle")
 
@@ -425,48 +421,18 @@ def handle_message(message):
         append_log(chat_id, "name_captured", {"fio": fio})
         return
 
-    # ----------------------------
-    # 2) Меню адаптации
-    # ----------------------------
-    if text == "📌 Адаптация":
-        set_dialog_step(chat_id, "wait_name")
-        bot.send_message(chat_id, "Напиши, пожалуйста, своё ФИО:")
-        append_log(chat_id, "adaptation_start")
-        set_status(chat_id, "Проходит адаптацию")
-        set_stage(chat_id, "День 1")
-        return
-
-    if text in ["✅ План на 1-й день", "📅 План на 1-ю неделю", "🎯 План на 1 месяц", "🧾 Документы / доступы (чеклист)"]:
-        bot.send_message(chat_id, f"{text}\n\nКонтент будет доработан позже.")
-        append_log(chat_id, "open_adaptation_section", {"section": text})
-
-        if text == "✅ План на 1-й день":
-            set_stage(chat_id, "День 1")
-        elif text == "📅 План на 1-ю неделю":
-            set_stage(chat_id, "Неделя 1")
-        elif text == "🎯 План на 1 месяц":
-            set_stage(chat_id, "Месяц 1")
-
-        return
-
-    # ----------------------------
-    # 3) Цели ИС (заглушка)
-    # ----------------------------
     if text == "🎯 Цели ИС":
         bot.send_message(chat_id, "🎯 Тут будут цели на испытательный срок (ИПИ).")
         append_log(chat_id, "open_goals")
         return
 
-    # ----------------------------
-    # 4) Вопросы (категория -> текст вопроса)
-    # ----------------------------
     if text == "❓ Задать вопрос":
         set_dialog_step(chat_id, "wait_question_category")
         bot.send_message(chat_id, "Выбери тему вопроса:", reply_markup=question_category_menu())
         append_log(chat_id, "ask_question_start")
         return
 
-    if step == "wait_question_category":
+    if get_dialog_step(chat_id) == "wait_question_category":
         categories = {
             "🔐 Мои логины и пароли": "logins",
             "⏱️ Организация и оплата рабочего времени": "work_time",
@@ -486,7 +452,7 @@ def handle_message(message):
         bot.send_message(chat_id, "Выбери тему вопроса кнопкой ниже:", reply_markup=question_category_menu())
         return
 
-    if step == "wait_question":
+    if get_dialog_step(chat_id) == "wait_question":
         q = text
         cat = get_question_cat(chat_id)
 
@@ -497,17 +463,14 @@ def handle_message(message):
         set_status(chat_id, "Есть вопрос")
         return
 
-    # fallback
     bot.send_message(chat_id, "Я понимаю только кнопки меню 🙂 Нажми /menu, если кнопки пропали.")
 
 
 # ----------------------------
-# Start (инициализация)
+# Start
 # ----------------------------
 init_sheets()
 
-# В webhook-режиме polling НЕ запускаем.
-# Polling — только для локального запуска: python bot.py
 if __name__ == "__main__":
     print("Bot started (local polling)...")
     bot.infinity_polling(timeout=60, long_polling_timeout=60)

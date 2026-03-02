@@ -1,5 +1,7 @@
-fastapi
-uvicorn[standard]
-pyTelegramBotAPI
-gspread
-google-auth
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pyTelegramBotAPI==4.22.1
+gspread==6.1.2
+google-auth==2.34.0
+google-auth-oauthlib==1.2.1
+google-auth-httplib2==0.2.0

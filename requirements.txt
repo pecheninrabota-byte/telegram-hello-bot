@@ -1,7 +1,5 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-pyTelegramBotAPI==4.22.1
-gspread==6.1.2
-google-auth==2.34.0
-google-auth-oauthlib==1.2.1
-google-auth-httplib2==0.2.0
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+gspread==6.1.4
+google-auth==2.40.3
+pydantic==2.11.7

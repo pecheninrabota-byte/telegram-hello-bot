@@ -395,6 +395,7 @@ def health():
 
 @app.post("/chat", response_model=ChatResponse)
 @app.post("/api/chat", response_model=ChatResponse)
+@app.post("/api/message", response_model=ChatResponse)
 def chat(payload: ChatRequest):
     session_id, session = get_session(payload.session_id)
     raw_message = payload.message.strip()

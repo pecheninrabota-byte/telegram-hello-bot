@@ -443,7 +443,7 @@ def api_message(payload: MessageIn) -> Dict[str, Any]:
         return make_response(
             """Привет!
 
-Я Сиэс — HR-ассистент компании CS Medica.
+Я СиЭс — HR-ассистент компании CS Medica.
 
 Я могу помочь:
 • пройти адаптацию

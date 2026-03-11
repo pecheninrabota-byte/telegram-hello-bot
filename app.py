@@ -1,100 +1,31 @@
 import os
+import json
 import re
-import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Dict, Any, Optional, List
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# =========================
-# OPTIONAL GOOGLE SHEETS
-# =========================
-GSHEETS_ENABLED = False
-worksheet = None
-
 try:
     import gspread
     from google.oauth2.service_account import Credentials
-
-    GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-    GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "hr_bot_logs")
-
-    if GOOGLE_SERVICE_ACCOUNT_JSON:
-        import json
-
-        creds_dict = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        gc = gspread.authorize(credentials)
-        spreadsheet = gc.open(GOOGLE_SHEET_NAME)
-
-        try:
-            worksheet = spreadsheet.worksheet("logs")
-        except Exception:
-            worksheet = spreadsheet.add_worksheet(title="logs", rows="1000", cols="20")
-            worksheet.append_row(
-                [
-                    "timestamp",
-                    "session_id",
-                    "user_name",
-                    "department",
-                    "position",
-                    "event_type",
-                    "question_category",
-                    "question_text",
-                    "matched_keywords",
-                    "bot_reply",
-                ]
-            )
-
-        GSHEETS_ENABLED = True
-except Exception as e:
-    print(f"Google Sheets not enabled: {e}")
-    GSHEETS_ENABLED = False
+except Exception:
+    gspread = None
+    Credentials = None
 
 
-# =========================
-# APP
-# =========================
-app = FastAPI(title="CS Medica HR Assistant")
+app = FastAPI(title="CS Medica HR Assistant API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # при необходимости потом можно ограничить доменом Tilda
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-# =========================
-# IN-MEMORY SESSIONS
-# =========================
-sessions: Dict[str, Dict[str, Any]] = {}
-
-
-# =========================
-# MODELS
-# =========================
-class ChatRequest(BaseModel):
-    message: str
-    session_id: Optional[str] = None
-
-
-class ChatResponse(BaseModel):
-    session_id: str
-    reply: str
-    quick_replies: List[str] = []
-
-
-# =========================
-# STATIC CONTENT
-# =========================
 MAIN_MENU = [
     "Адаптация",
     "Испытательный срок",
@@ -102,138 +33,350 @@ MAIN_MENU = [
     "Задать вопрос",
 ]
 
+DEPARTMENTS = [
+    "Продажи",
+    "Офис",
+    "Логистика",
+    "IT",
+    "Другое",
+]
+
 ADAPTATION_MENU = [
     "План на 1-й день",
     "План на 1-ю неделю",
     "План на 1 месяц",
     "Документы и доступы",
-    "Назад в меню",
+    "Назад",
 ]
 
 ROLE_MENU = [
     "Кратко о моей должности",
     "Что особенно важно",
     "Ожидания на испытательный срок",
-    "Назад в меню",
+    "Назад",
 ]
 
 QUESTION_CATEGORIES = [
+    "Доступы и системы",
+    "Рабочее время и процессы",
     "Рабочие задачи",
-    "Оформление и документы",
-    "График и правила",
     "Другое",
-    "Назад в меню",
+    "Назад",
 ]
 
+STATE_WAIT_NAME = "wait_name"
+STATE_WAIT_DEPARTMENT = "wait_department"
+STATE_WAIT_POSITION = "wait_position"
+STATE_IDLE = "idle"
+STATE_WAIT_QUESTION_CATEGORY = "wait_question_category"
+STATE_WAIT_QUESTION = "wait_question"
 
-ADAPTATION_CONTENT = {
-    "План на 1-й день": (
-        "Понял! Вот информация.\n\n"
-        "В первый день важно:\n"
-        "— познакомиться с командой и руководителем\n"
-        "— получить базовые доступы\n"
-        "— понять основные задачи на старт\n"
-        "— уточнить план адаптации на ближайшие дни"
-    ),
-    "План на 1-ю неделю": (
-        "Понял! Вот информация.\n\n"
-        "В первую неделю важно:\n"
-        "— разобраться в основных процессах\n"
-        "— понять зону своей ответственности\n"
-        "— познакомиться с ключевыми коллегами\n"
-        "— уточнить ожидания на испытательный срок"
-    ),
-    "План на 1 месяц": (
-        "Понял! Вот информация.\n\n"
-        "В первый месяц важно:\n"
-        "— войти в рабочий ритм\n"
-        "— закрепить понимание задач и процессов\n"
-        "— собрать вопросы по роли и приоритетам\n"
-        "— свериться с руководителем по промежуточным ожиданиям"
-    ),
-    "Документы и доступы": (
-        "Понял! Вот информация.\n\n"
-        "По документам и доступам обычно важно проверить:\n"
-        "— оформлены ли все кадровые документы\n"
-        "— есть ли доступы к нужным системам\n"
-        "— понятно ли, к кому обращаться по оргвопросам"
-    ),
-}
+sessions: Dict[str, Dict[str, Any]] = {}
 
-PROBATION_TEXT = (
-    "Понял! Вот информация.\n\n"
-    "Испытательный срок — это период, когда важно понять задачи, ожидания по роли, "
-    "рабочие процессы и критерии успешной адаптации. По общему ориентиру важно:\n"
-    "— понимать свои приоритеты\n"
-    "— быть на связи с руководителем\n"
-    "— вовремя задавать вопросы\n"
-    "— отслеживать прогресс по задачам"
-)
-
-ROLE_CONTENT = {
-    "Кратко о моей должности": (
-        "Понял! Вот информация.\n\n"
-        "Здесь бот может показывать краткое описание роли сотрудника на основе выбранной должности. "
-        "Пока в пилоте можно использовать общий ориентир: твоя роль — понимать задачи, зону ответственности "
-        "и ожидаемый результат по своей позиции."
-    ),
-    "Что особенно важно": (
-        "Понял! Вот информация.\n\n"
-        "Обычно особенно важно:\n"
-        "— понять приоритеты по задачам\n"
-        "— быстро уточнять непонятные моменты\n"
-        "— не копить вопросы\n"
-        "— синхронизироваться с руководителем по ожиданиям"
-    ),
-    "Ожидания на испытательный срок": (
-        "Понял! Вот информация.\n\n"
-        "На испытательном сроке обычно важно:\n"
-        "— понять процессы и рабочие задачи\n"
-        "— выйти на стабильное выполнение своей роли\n"
-        "— показать вовлечённость и понимание приоритетов\n\n"
-        "Точные ожидания по конкретной роли лучше уточнять у руководителя."
-    ),
-}
+worksheet = None
+sheets_status_message = "Sheets not initialized"
 
 
-# =========================
-# KNOWN Q&A
-# =========================
+class MessageIn(BaseModel):
+    session_id: str
+    text: str
+
+
+def now_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def normalize_text(text: str) -> str:
+    text = text.lower().strip()
+    text = text.replace("ё", "е")
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def get_session(session_id: str) -> Dict[str, Any]:
+    if session_id not in sessions:
+        sessions[session_id] = {
+            "session_id": session_id,
+            "name": "",
+            "department": "",
+            "position": "",
+            "level": "",
+            "start_date": "",
+            "probation_end": "",
+            "status": "active",
+            "adaptation_stage": "",
+            "dialog_step": STATE_WAIT_NAME,
+            "question_category": "",
+            "probation_goals": "",
+            "current_tasks": "",
+            "last_activity": now_str(),
+            "logs": "Сессия создана",
+        }
+    return sessions[session_id]
+
+
+def add_log(session: Dict[str, Any], message: str) -> None:
+    line = f"[{now_str()}] {message}"
+    if session.get("logs"):
+        session["logs"] += "\n" + line
+    else:
+        session["logs"] = line
+    session["last_activity"] = now_str()
+
+
+def init_sheets():
+    global worksheet, sheets_status_message
+
+    sheet_id = os.getenv("SHEET_ID", "").strip()
+    worksheet_name = os.getenv("WORKSHEET_NAME", "").strip() or "Sheet1"
+    creds_json_raw = os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip()
+
+    if not sheet_id or not creds_json_raw:
+        sheets_status_message = "Sheets: secrets not set -> using memory state."
+        print(sheets_status_message)
+        return None
+
+    if gspread is None or Credentials is None:
+        sheets_status_message = "Sheets: required libraries not installed."
+        print(sheets_status_message)
+        return None
+
+    try:
+        creds_info = json.loads(creds_json_raw)
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        credentials = Credentials.from_service_account_info(creds_info, scopes=scopes)
+        gc = gspread.authorize(credentials)
+
+        sh = gc.open_by_key(sheet_id)
+        ws = sh.worksheet(worksheet_name)
+
+        sheets_status_message = f"Sheets connected worksheet={worksheet_name}"
+        print(sheets_status_message)
+        return ws
+
+    except Exception as e:
+        sheets_status_message = f"Sheets init error: {e}"
+        print(sheets_status_message)
+        return None
+
+
+def ensure_header():
+    global worksheet
+    if worksheet is None:
+        return
+
+    try:
+        first_row = worksheet.row_values(1)
+        expected = [
+            "session_id",
+            "Имя",
+            "Направление",
+            "Должность",
+            "Уровень",
+            "Дата выхода",
+            "Окончание ИС",
+            "Статус",
+            "Этап адаптации",
+            "Шаг диалога",
+            "Категория вопроса",
+            "Цели ИС",
+            "Текущие задачи",
+            "Последняя активность",
+            "Логи",
+        ]
+
+        if first_row != expected:
+            worksheet.update("A1:O1", [expected])
+            print("Sheets header ensured")
+    except Exception as e:
+        print(f"Sheets header error: {e}")
+
+
+def session_to_row(session: Dict[str, Any]):
+    return [
+        session.get("session_id", ""),
+        session.get("name", ""),
+        session.get("department", ""),
+        session.get("position", ""),
+        session.get("level", ""),
+        session.get("start_date", ""),
+        session.get("probation_end", ""),
+        session.get("status", ""),
+        session.get("adaptation_stage", ""),
+        session.get("dialog_step", ""),
+        session.get("question_category", ""),
+        session.get("probation_goals", ""),
+        session.get("current_tasks", ""),
+        session.get("last_activity", ""),
+        session.get("logs", ""),
+    ]
+
+
+def save_session_to_sheet(session: Dict[str, Any]) -> None:
+    global worksheet
+    if worksheet is None:
+        return
+
+    try:
+        session_id = session["session_id"]
+        found = worksheet.find(session_id)
+        row_data = session_to_row(session)
+
+        if found:
+            row_number = found.row
+            worksheet.update(f"A{row_number}:O{row_number}", [row_data])
+        else:
+            worksheet.append_row(row_data)
+
+    except Exception as e:
+        print(f"Sheets save error: {e}")
+
+
+def adaptation_text(item: str, session: Dict[str, Any]) -> str:
+    name = session.get("name", "")
+    position = session.get("position", "")
+    prefix = "Понял! Вот информация.\n\n"
+
+    if name and position:
+        intro = f"{name}, вот ориентир для роли «{position}»:\n\n"
+    elif name:
+        intro = f"{name}, вот информация:\n\n"
+    else:
+        intro = ""
+
+    if item == "План на 1-й день":
+        return (
+            prefix
+            + intro
+            + "План на 1-й день:\n"
+            "1. Познакомиться с командой и руководителем.\n"
+            "2. Получить основные доступы и рабочие инструменты.\n"
+            "3. Разобраться, к кому обращаться по ключевым вопросам.\n"
+            "4. Уточнить первые задачи и ожидания на старт."
+        )
+
+    if item == "План на 1-ю неделю":
+        return (
+            prefix
+            + intro
+            + "План на 1-ю неделю:\n"
+            "1. Понять ключевые рабочие процессы.\n"
+            "2. Пройти вводные материалы и обязательные обучения.\n"
+            "3. Зафиксировать открытые вопросы по задачам и доступам.\n"
+            "4. Свериться с руководителем по приоритетам."
+        )
+
+    if item == "План на 1 месяц":
+        return (
+            prefix
+            + intro
+            + "План на 1 месяц:\n"
+            "1. Освоить основные инструменты и правила работы.\n"
+            "2. Войти в регулярный ритм задач.\n"
+            "3. Понять ожидания по своей роли.\n"
+            "4. Отметить, где еще нужна поддержка или обучение."
+        )
+
+    if item == "Документы и доступы":
+        return (
+            prefix
+            + intro
+            + "Документы и доступы:\n"
+            "1. Корпоративная почта.\n"
+            "2. Учетные записи в рабочих системах.\n"
+            "3. Доступ к внутренним материалам и регламентам.\n"
+            "4. Контакты HR и руководителя.\n"
+            "5. Список обязательных документов и сервисов."
+        )
+
+    return "Раздел не найден."
+
+
+def role_text(item: str, session: Dict[str, Any]) -> str:
+    name = session.get("name", "")
+    position = session.get("position", "").strip() or "вашей должности"
+
+    prefix = "Понял! Вот информация.\n\n"
+    hello = f"{name}, " if name else ""
+
+    if item == "Кратко о моей должности":
+        return (
+            prefix
+            + f"{hello}вот краткая выжимка по роли «{position}»:\n\n"
+            "Здесь будет краткое описание роли, основных задач и зоны ответственности.\n"
+            "На следующем этапе мы подставим сюда персонализированный текст именно под эту должность."
+        )
+
+    if item == "Что особенно важно":
+        return (
+            prefix
+            + f"для роли «{position}» важно:\n\n"
+            "• понимать свои основные задачи;\n"
+            "• знать ключевые процессы и точки взаимодействия;\n"
+            "• быстро разобраться в рабочих инструментах;\n"
+            "• уточнить ожидания руководителя на стартовом этапе."
+        )
+
+    if item == "Ожидания на испытательный срок":
+        return (
+            prefix
+            + f"по роли «{position}» на испытательном сроке обычно важно:\n\n"
+            "• освоить базовые процессы;\n"
+            "• войти в рабочий ритм;\n"
+            "• показать понимание зоны ответственности;\n"
+            "• регулярно сверяться по прогрессу с руководителем."
+        )
+
+    return "Раздел не найден."
+
+
+def probation_text(session: Dict[str, Any]) -> str:
+    name = session.get("name", "")
+    position = session.get("position", "").strip()
+
+    intro = ""
+    if name and position:
+        intro = f"{name}, вот ориентир для роли «{position}»:\n\n"
+    elif name:
+        intro = f"{name}, вот ориентир:\n\n"
+
+    return (
+        "Понял! Вот информация.\n\n"
+        + intro
+        + "Испытательный срок:\n"
+        "1. Понять ключевые ожидания по своей роли.\n"
+        "2. Освоить основные процессы и инструменты.\n"
+        "3. Согласовать приоритетные задачи с руководителем.\n"
+        "4. Регулярно сверяться по прогрессу."
+    )
+
+
 KNOWN_QA = [
     {
         "keywords": ["испытательный срок", "испыталка"],
-        "reply": PROBATION_TEXT,
+        "reply_builder": lambda session: probation_text(session),
     },
     {
         "keywords": ["первый день", "1-й день", "план на 1-й день"],
-        "reply": ADAPTATION_CONTENT["План на 1-й день"],
+        "reply_builder": lambda session: adaptation_text("План на 1-й день", session),
     },
     {
         "keywords": ["первая неделя", "1-я неделя", "план на 1-ю неделю"],
-        "reply": ADAPTATION_CONTENT["План на 1-ю неделю"],
+        "reply_builder": lambda session: adaptation_text("План на 1-ю неделю", session),
     },
     {
         "keywords": ["1 месяц", "первый месяц", "план на 1 месяц"],
-        "reply": ADAPTATION_CONTENT["План на 1 месяц"],
+        "reply_builder": lambda session: adaptation_text("План на 1 месяц", session),
     },
     {
         "keywords": ["документы", "доступы"],
-        "reply": ADAPTATION_CONTENT["Документы и доступы"],
-    },
-    {
-        "keywords": ["моя роль", "роль", "должность"],
-        "reply": (
-            "Понял! Вот информация.\n\n"
-            "В разделе «Моя роль» можно посмотреть краткое описание должности, "
-            "что особенно важно и ожидания на испытательный срок."
-        ),
+        "reply_builder": lambda session: adaptation_text("Документы и доступы", session),
     },
 ]
 
-
-# =========================
-# FALLBACK ROUTING
-# =========================
 MANAGER_KEYWORDS = [
     "задач",
     "задача",
@@ -262,307 +405,304 @@ MANAGER_KEYWORDS = [
     "что мне делать",
 ]
 
+MANAGER_REPLY = "Понял! Тут лучше уточнить у твоего руководителя, это его зона ответственности."
+
 HR_REPLY = (
     "Понял! Тут лучше обратиться к HR.\n\n"
     "HR поможет с организационными вопросами и подскажет следующий шаг."
 )
 
-MANAGER_REPLY = (
-    "Понял! Тут лучше уточнить у твоего руководителя, это его зона ответственности."
-)
 
-
-# =========================
-# HELPERS
-# =========================
-def now_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def normalize_text(text: str) -> str:
-    text = text.lower().strip()
-    text = text.replace("ё", "е")
-    text = re.sub(r"\s+", " ", text)
-    return text
-
-
-def create_session() -> Dict[str, Any]:
-    return {
-        "state": "ask_name",
-        "name": None,
-        "department": None,
-        "position": None,
-        "question_category": None,
-        "awaiting_free_question": False,
-    }
-
-
-def get_session(session_id: Optional[str]) -> (str, Dict[str, Any]):
-    if not session_id or session_id not in sessions:
-        session_id = str(uuid.uuid4())
-        sessions[session_id] = create_session()
-    return session_id, sessions[session_id]
-
-
-def log_event(
-    session_id: str,
-    event_type: str,
-    question_text: str = "",
-    question_category: str = "",
-    matched_keywords: str = "",
-    bot_reply: str = "",
-) -> None:
-    session = sessions.get(session_id, {})
-    row = [
-        now_str(),
-        session_id,
-        session.get("name") or "",
-        session.get("department") or "",
-        session.get("position") or "",
-        event_type,
-        question_category,
-        question_text,
-        matched_keywords,
-        bot_reply,
-    ]
-
-    if GSHEETS_ENABLED and worksheet is not None:
-        try:
-            worksheet.append_row(row)
-        except Exception as e:
-            print(f"Sheets logging error: {e}")
-
-
-def match_known_answer(message: str) -> Optional[str]:
-    text = normalize_text(message)
+def match_known_answer(question: str, session: Dict[str, Any]) -> Optional[str]:
+    normalized = normalize_text(question)
     for item in KNOWN_QA:
         for keyword in item["keywords"]:
-            if keyword in text:
-                return item["reply"]
+            if keyword in normalized:
+                return item["reply_builder"](session)
     return None
 
 
-def classify_question(message: str) -> Dict[str, Any]:
-    text = normalize_text(message)
-    matched = []
-
+def classify_question(question: str) -> str:
+    normalized = normalize_text(question)
     for keyword in MANAGER_KEYWORDS:
-        if keyword in text:
-            matched.append(keyword)
-
-    if matched:
-        return {
-            "route": "manager",
-            "matched_keywords": matched,
-            "reply": MANAGER_REPLY,
-        }
-
-    return {
-        "route": "hr",
-        "matched_keywords": [],
-        "reply": HR_REPLY,
-    }
+        if keyword in normalized:
+            return "manager"
+    return "hr"
 
 
-def menu_reply() -> ChatResponse:
-    return ChatResponse(
-        session_id="",
-        reply="Понял! Вот информация.\n\nВыбери раздел, с которым помочь.",
-        quick_replies=MAIN_MENU,
-    )
+@app.on_event("startup")
+def startup_event():
+    global worksheet
+    worksheet = init_sheets()
+    ensure_header()
 
 
-def build_main_menu_response(session_id: str) -> ChatResponse:
-    return ChatResponse(
-        session_id=session_id,
-        reply="Понял! Вот информация.\n\nВыбери раздел, с которым помочь.",
-        quick_replies=MAIN_MENU,
-    )
-
-
-# =========================
-# ROUTES
-# =========================
 @app.get("/")
 def root():
-    return {"ok": True, "service": "CS Medica HR Assistant"}
+    return {
+        "ok": True,
+        "service": "cs-medica-hr-assistant",
+        "message": "API is running"
+    }
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "ok": True,
+        "sheets_connected": worksheet is not None,
+        "sheets_status": sheets_status_message
+    }
 
 
-@app.post("/chat", response_model=ChatResponse)
-@app.post("/api/chat", response_model=ChatResponse)
-@app.post("/api/message", response_model=ChatResponse)
-def chat(payload: ChatRequest):
-    session_id, session = get_session(payload.session_id)
-    raw_message = payload.message.strip()
-    message = normalize_text(raw_message)
+@app.post("/api/message")
+def api_message(payload: MessageIn):
+    session_id = payload.session_id.strip()
+    text = payload.text.strip()
 
-    # ===== ONBOARDING =====
-    if session["state"] == "ask_name":
-        session["state"] = "ask_department"
-        return ChatResponse(
-            session_id=session_id,
-            reply="Привет! Я Сиэс, HR-ассистент по адаптации 😊\n\nКак тебя зовут?",
-            quick_replies=[],
-        )
+    if not session_id:
+        return {
+            "reply": "Не найден session_id.",
+            "quick_replies": [],
+            "state": STATE_IDLE,
+        }
 
-    if session["state"] == "ask_department":
-        if not session["name"]:
-            session["name"] = raw_message
+    session = get_session(session_id)
 
-        session["state"] = "ask_position"
-        return ChatResponse(
-            session_id=session_id,
-            reply=f"Очень приятно, {session['name']}! В каком ты направлении или департаменте?",
-            quick_replies=[],
-        )
+    if text == "__start__":
+        if not session.get("name"):
+            session["dialog_step"] = STATE_WAIT_NAME
+            add_log(session, "BOT: Старт сценария знакомства")
+            save_session_to_sheet(session)
+            return {
+                "reply": (
+                    "Привет!\n\n"
+                    "Я Сиэс — HR-ассистент CS Medica.\n\n"
+                    "Помогу тебе:\n"
+                    "• пройти адаптацию\n"
+                    "• разобраться с целями испытательного срока\n"
+                    "• найти ответы на рабочие вопросы\n"
+                    "• важный момент: давай по возможности общаться в одном браузере, "
+                    "чтобы я не забыл наш диалог.\n\n"
+                    "Для начала давай познакомимся.\n"
+                    "Как я могу к тебе обращаться?"
+                ),
+                "quick_replies": [],
+                "state": STATE_WAIT_NAME,
+            }
+        else:
+            add_log(session, f"BOT: Возврат пользователя {session.get('name', '')}")
+            save_session_to_sheet(session)
+            return {
+                "reply": f"С возвращением, {session.get('name', '')}. Выбери раздел ниже.",
+                "quick_replies": MAIN_MENU,
+                "state": STATE_IDLE,
+            }
 
-    if session["state"] == "ask_position":
-        if not session["department"]:
-            session["department"] = raw_message
+    if not text:
+        return {
+            "reply": "Напиши, пожалуйста, сообщение.",
+            "quick_replies": [],
+            "state": session.get("dialog_step", STATE_IDLE),
+        }
 
-        session["state"] = "main_menu"
-        return ChatResponse(
-            session_id=session_id,
-            reply="Отлично! Подскажи, пожалуйста, какая у тебя должность?",
-            quick_replies=[],
-        )
+    add_log(session, f"USER: {text}")
 
-    # Завершение знакомства
-    if session["state"] == "main_menu" and not session["position"]:
-        session["position"] = raw_message
-        return ChatResponse(
-            session_id=session_id,
-            reply=(
-                f"Спасибо! Теперь я немного лучше тебя знаю.\n\n"
-                f"Понял! Вот информация.\n\n"
-                f"Выбери раздел, с которым помочь."
+    if text == "Назад":
+        session["dialog_step"] = STATE_IDLE
+        session["question_category"] = ""
+        add_log(session, "BOT: Возврат в главное меню")
+        save_session_to_sheet(session)
+        return {
+            "reply": "Понял! Возвращаю в главное меню.",
+            "quick_replies": MAIN_MENU,
+            "state": STATE_IDLE,
+        }
+
+    if session["dialog_step"] == STATE_WAIT_NAME:
+        session["name"] = text
+        session["dialog_step"] = STATE_WAIT_DEPARTMENT
+        add_log(session, f"Сохранено имя: {text}")
+        save_session_to_sheet(session)
+        return {
+            "reply": f"{text}, приятно познакомиться.\n\nВ каком направлении ты работаешь?",
+            "quick_replies": DEPARTMENTS,
+            "state": STATE_WAIT_DEPARTMENT,
+        }
+
+    if session["dialog_step"] == STATE_WAIT_DEPARTMENT:
+        if text not in DEPARTMENTS:
+            return {
+                "reply": "Пожалуйста, выбери направление кнопкой ниже.",
+                "quick_replies": DEPARTMENTS,
+                "state": STATE_WAIT_DEPARTMENT,
+            }
+
+        session["department"] = text
+        session["dialog_step"] = STATE_WAIT_POSITION
+        add_log(session, f"Сохранено направление: {text}")
+        save_session_to_sheet(session)
+        return {
+            "reply": "Понял! Теперь напиши, пожалуйста, свою должность.",
+            "quick_replies": [],
+            "state": STATE_WAIT_POSITION,
+        }
+
+    if session["dialog_step"] == STATE_WAIT_POSITION:
+        session["position"] = text
+        session["dialog_step"] = STATE_IDLE
+        add_log(session, f"Сохранена должность: {text}")
+        save_session_to_sheet(session)
+        return {
+            "reply": (
+                "Отлично, спасибо.\n\n"
+                f"Теперь я смогу подбирать информацию для роли «{text}».\n\n"
+                "Выбери раздел ниже."
             ),
-            quick_replies=MAIN_MENU,
-        )
+            "quick_replies": MAIN_MENU,
+            "state": STATE_IDLE,
+        }
 
-    # ===== NAVIGATION =====
-    if raw_message == "Назад в меню":
-        session["awaiting_free_question"] = False
-        session["question_category"] = None
-        return build_main_menu_response(session_id)
+    if session["dialog_step"] == STATE_WAIT_QUESTION_CATEGORY:
+        if text not in QUESTION_CATEGORIES:
+            return {
+                "reply": "Пожалуйста, выбери категорию вопроса кнопкой ниже.",
+                "quick_replies": QUESTION_CATEGORIES,
+                "state": STATE_WAIT_QUESTION_CATEGORY,
+            }
 
-    if raw_message == "Адаптация":
-        return ChatResponse(
-            session_id=session_id,
-            reply="Понял! Вот информация.\n\nВыбери, что именно тебе нужно по адаптации.",
-            quick_replies=ADAPTATION_MENU,
-        )
+        if text == "Назад":
+            session["dialog_step"] = STATE_IDLE
+            session["question_category"] = ""
+            save_session_to_sheet(session)
+            return {
+                "reply": "Понял! Возвращаю в главное меню.",
+                "quick_replies": MAIN_MENU,
+                "state": STATE_IDLE,
+            }
 
-    if raw_message in ADAPTATION_CONTENT:
-        return ChatResponse(
-            session_id=session_id,
-            reply=ADAPTATION_CONTENT[raw_message],
-            quick_replies=["Назад в меню"],
-        )
+        session["question_category"] = text
+        session["dialog_step"] = STATE_WAIT_QUESTION
+        add_log(session, f"Выбрана категория вопроса: {text}")
+        save_session_to_sheet(session)
+        return {
+            "reply": "Понял! Теперь напиши, пожалуйста, сам вопрос.",
+            "quick_replies": ["Назад"],
+            "state": STATE_WAIT_QUESTION,
+        }
 
-    if raw_message == "Испытательный срок":
-        return ChatResponse(
-            session_id=session_id,
-            reply=PROBATION_TEXT,
-            quick_replies=["Назад в меню"],
-        )
+    if session["dialog_step"] == STATE_WAIT_QUESTION:
+        category = session.get("question_category", "Другое")
 
-    if raw_message == "Моя роль":
-        return ChatResponse(
-            session_id=session_id,
-            reply="Понял! Вот информация.\n\nВыбери, что именно показать по твоей роли.",
-            quick_replies=ROLE_MENU,
-        )
-
-    if raw_message in ROLE_CONTENT:
-        return ChatResponse(
-            session_id=session_id,
-            reply=ROLE_CONTENT[raw_message],
-            quick_replies=["Назад в меню"],
-        )
-
-    if raw_message == "Задать вопрос":
-        session["awaiting_free_question"] = False
-        session["question_category"] = None
-        return ChatResponse(
-            session_id=session_id,
-            reply="Понял! Вот информация.\n\nВыбери категорию вопроса.",
-            quick_replies=QUESTION_CATEGORIES,
-        )
-
-    if raw_message in QUESTION_CATEGORIES:
-        if raw_message == "Назад в меню":
-            return build_main_menu_response(session_id)
-
-        session["question_category"] = raw_message
-        session["awaiting_free_question"] = True
-        return ChatResponse(
-            session_id=session_id,
-            reply="Понял! Напиши свой вопрос одним сообщением.",
-            quick_replies=[],
-        )
-
-    # ===== FREE QUESTION FLOW =====
-    if session["awaiting_free_question"]:
-        session["awaiting_free_question"] = False
-
-        known_answer = match_known_answer(raw_message)
+        known_answer = match_known_answer(text, session)
         if known_answer:
-            log_event(
-                session_id=session_id,
-                event_type="known_answer",
-                question_text=raw_message,
-                question_category=session.get("question_category") or "",
-                matched_keywords="known_answer",
-                bot_reply=known_answer,
-            )
-            session["question_category"] = None
-            return ChatResponse(
-                session_id=session_id,
-                reply=known_answer,
-                quick_replies=["Задать вопрос", "Назад в меню"],
-            )
+            add_log(session, f"BOT: Известный ответ на вопрос [{category}]")
+            add_log(session, f"Вопрос [{category}]: {text}")
+            session["dialog_step"] = STATE_IDLE
+            session["question_category"] = ""
+            save_session_to_sheet(session)
+            return {
+                "reply": known_answer,
+                "quick_replies": MAIN_MENU,
+                "state": STATE_IDLE,
+            }
 
-        classification = classify_question(raw_message)
-        bot_reply = classification["reply"]
+        route = classify_question(text)
+        if route == "manager":
+            answer = MANAGER_REPLY
+            add_log(session, f"BOT: Маршрут к руководителю [{category}]")
+        else:
+            answer = HR_REPLY
+            add_log(session, f"BOT: Маршрут к HR [{category}]")
 
-        log_event(
-            session_id=session_id,
-            event_type="fallback_route",
-            question_text=raw_message,
-            question_category=classification["route"],
-            matched_keywords=", ".join(classification["matched_keywords"]),
-            bot_reply=bot_reply,
-        )
+        add_log(session, f"Вопрос [{category}]: {text}")
+        session["dialog_step"] = STATE_IDLE
+        session["question_category"] = ""
+        save_session_to_sheet(session)
 
-        session["question_category"] = None
-        return ChatResponse(
-            session_id=session_id,
-            reply=bot_reply,
-            quick_replies=["Задать вопрос", "Назад в меню"],
-        )
+        return {
+            "reply": answer,
+            "quick_replies": MAIN_MENU,
+            "state": STATE_IDLE,
+        }
 
-    # ===== DIRECT KNOWN Q&A OUTSIDE CATEGORY FLOW =====
-    known_answer = match_known_answer(raw_message)
-    if known_answer:
-        log_event(
-            session_id=session_id,
-            event_type="known_answer_direct",
-            question_text=raw_message,
-            question_category="direct",
-            matched_keywords="known_answer",
-            bot_reply=known_answer,
-        )
-        return ChatResponse(
-            session_id=session_id,
-            reply=known_answer,
-            quick_replies=["Назад в меню"],
-        )
+    if text == "Адаптация":
+        session["dialog_step"] = STATE_IDLE
+        add_log(session, "BOT: Открыто меню адаптации")
+        save_session_to_sheet(session)
+        return {
+            "reply": "Понял! Вот информация.\n\nВыбери нужный раздел по адаптации.",
+            "quick_replies": ADAPTATION_MENU,
+            "state": STATE_IDLE,
+        }
 
-    # ===== DEFAULT: MAIN MENU =====
-    return build_main_menu_response(session_id)
+    if text in ADAPTATION_MENU:
+        if text == "Назад":
+            return {
+                "reply": "Понял! Возвращаю в главное меню.",
+                "quick_replies": MAIN_MENU,
+                "state": STATE_IDLE,
+            }
+
+        session["adaptation_stage"] = text
+        add_log(session, f"Открыт раздел адаптации: {text}")
+        save_session_to_sheet(session)
+        return {
+            "reply": adaptation_text(text, session),
+            "quick_replies": ADAPTATION_MENU,
+            "state": STATE_IDLE,
+        }
+
+    if text == "Испытательный срок":
+        session["dialog_step"] = STATE_IDLE
+        add_log(session, "BOT: Открыт раздел испытательного срока")
+        save_session_to_sheet(session)
+        return {
+            "reply": probation_text(session),
+            "quick_replies": MAIN_MENU,
+            "state": STATE_IDLE,
+        }
+
+    if text == "Моя роль":
+        session["dialog_step"] = STATE_IDLE
+        add_log(session, "BOT: Открыт раздел 'Моя роль'")
+        save_session_to_sheet(session)
+        return {
+            "reply": "Понял! Вот информация.\n\nВыбери нужный раздел по своей роли.",
+            "quick_replies": ROLE_MENU,
+            "state": STATE_IDLE,
+        }
+
+    if text in ROLE_MENU:
+        if text == "Назад":
+            return {
+                "reply": "Понял! Возвращаю в главное меню.",
+                "quick_replies": MAIN_MENU,
+                "state": STATE_IDLE,
+            }
+
+        add_log(session, f"Открыт раздел роли: {text}")
+        save_session_to_sheet(session)
+        return {
+            "reply": role_text(text, session),
+            "quick_replies": ROLE_MENU,
+            "state": STATE_IDLE,
+        }
+
+    if text == "Задать вопрос":
+        session["dialog_step"] = STATE_WAIT_QUESTION_CATEGORY
+        add_log(session, "BOT: Запрошен выбор категории вопроса")
+        save_session_to_sheet(session)
+        return {
+            "reply": "Понял! Выбери категорию вопроса.",
+            "quick_replies": QUESTION_CATEGORIES,
+            "state": STATE_WAIT_QUESTION_CATEGORY,
+        }
+
+    add_log(session, "BOT: Не распознано, показано главное меню")
+    save_session_to_sheet(session)
+    return {
+        "reply": "Понял! Я пока понимаю основные сценарии. Выбери один из разделов ниже.",
+        "quick_replies": MAIN_MENU,
+        "state": STATE_IDLE,
+    }

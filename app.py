@@ -192,7 +192,6 @@ S:\\Отдел_ДИ
     "скачать 1с",
     "установить 1с",
     "1с на телефон"
-],": ["приложение 1с"],
         "answer": ""Рекомендуем установить мобильное приложение
 1С:Кабинет сотрудника.
 
@@ -254,19 +253,54 @@ BestBenefits.
 Ссылка:
 [ссылка]""",
     },
-    {
-        "keywords": [    "контакты","к кому обратиться","как связаться с hr","hr","контакт hr","связаться с hr","кому написать","как написать hr", "как найти hr"
+   {
+    "keywords": [
+        "контакты hr",
+        "hr",
+        "кадры",
+        "кадровый отдел",
+        "как связаться с hr",
+        "контакт hr",
+        "hr контакт",
+        "кому написать hr",
+        "hr сергей печенин"
     ],
-        "answer": """Если возник вопрос, можно обратиться:
+    "answer": """По вопросам адаптации можно обратиться к HR:
 
-По обучению:
+Сергей Печенин
+HR-специалист
+
+Напиши ему в корпоративной почте или через Bitrix24.""",
+},
+{
+    "keywords": [
+        "корпоративный университет",
+        "обучение",
+        "курсы",
+        "обучение сотрудника",
+        "вопрос по обучению",
+        "курсы компании"
+    ],
+    "answer": """По вопросам обучения и корпоративного университета можно обратиться:
+
 Ефремова Надежда
-sdo@csmedica.ru
+sdo@csmedica.ru""",
+},
+{
+    "keywords": [
+        "it поддержка",
+        "айти",
+        "проблема с доступом",
+        "не работает система",
+        "логин пароль",
+        "доступ в систему"
+    ],
+    "answer": """Если возникли проблемы с доступами или системами,
+напиши в IT поддержку:
 
-По адаптации:
-непосредственный руководитель
-или HR Сергей Печенин.""",
-    },
+Звягин Иван или Мансуров Илья
+it-help@csmedica.ru""",
+},
     {
         "keywords": ["переговорную", "забронировать переговорную", "переговорка", "переговорная комната"],
         "answer": """Переговорные комнаты бронируются
@@ -289,13 +323,14 @@ for item in KNOWLEDGE_BASE:
 STOP_WORDS = {
     "как", "где", "что", "это", "у", "в", "на", "по", "и", "или",
     "мне", "мой", "моя", "мое", "с", "к", "для", "а", "но", "ли",
-    "же", "про", "под", "из", "от", "до"
+    "же", "про", "под", "из", "от", "до", "не", "ну", "а", "если",
+    "нужно", "надо", "можно", "хочу", "хотел", "подскажи", "скажите"
 }
 
 
 def tokenize(text: str) -> List[str]:
     text = normalize(text)
-    words = text.split()
+    words = re.findall(r"[a-zа-я0-9]+", text)
     return [w for w in words if len(w) > 1 and w not in STOP_WORDS]
 
 
@@ -307,22 +342,30 @@ def score_keywords(query_text: str, keywords: List[str]) -> int:
     for keyword in keywords:
         keyword_norm = normalize(keyword)
 
-        # 1. точное вхождение фразы
+        # 1. полное вхождение ключевой фразы
         if keyword_norm in normalized_query:
             best_score = max(best_score, 100)
             continue
 
-        # 2. совпадение по словам
         keyword_tokens = set(tokenize(keyword_norm))
         if not keyword_tokens:
             continue
 
         overlap = len(query_tokens & keyword_tokens)
-        if overlap > 0:
-            score = overlap * 10
-            if overlap == len(keyword_tokens):
-                score += 20
-            best_score = max(best_score, score)
+
+        # 2. совпали все слова ключа
+        if overlap == len(keyword_tokens) and overlap > 0:
+            best_score = max(best_score, 60)
+            continue
+
+        # 3. совпала значимая часть слов
+        if len(keyword_tokens) >= 2 and overlap >= 2:
+            best_score = max(best_score, 35)
+            continue
+
+        # 4. одно сильное совпадение для коротких ключей
+        if len(keyword_tokens) == 1 and overlap == 1:
+            best_score = max(best_score, 20)
 
     return best_score
 

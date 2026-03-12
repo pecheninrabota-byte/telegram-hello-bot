@@ -181,7 +181,7 @@ S:\\Отдел_ДИ
 • основными процессами.
 
 Пройти курс можно в корпоративном университете:
-[https://mirapolis.csdeskwork.ru/mira/s/zAWNZM]""",
+https://mirapolis.csdeskwork.ru/mira/s/zAWNZM""",
     },
     {
         "keywords": ["организация рабочего времени"],
@@ -192,7 +192,7 @@ S:\\Отдел_ДИ
 • как выстраивать рабочий день.
 
 Найти курс можно в корпоративном университете:
-[https://mirapolis.csdeskwork.ru/mira/s/rE9oui]""",
+https://mirapolis.csdeskwork.ru/mira/s/rE9oui""",
     },
     {
         "keywords": ["психологическое тестирование", "мои опросы"],
@@ -209,7 +209,7 @@ S:\\Отдел_ДИ
 корпоративную подпись в Outlook.
 
 Инструкция находится здесь:
-[https://bitrix.csdeskwork.ru/knowledge/glavnaya_str/stati/pochta/kontent/nastroykapodpisidlyaoutlook/]""",
+https://bitrix.csdeskwork.ru/knowledge/glavnaya_str/stati/pochta/kontent/nastroykapodpisidlyaoutlook/""",
     },
     {
         "keywords": ["битрикс", "битрикс24", "битрик 24", "Битрикс", "Битрикс 24", "Битрикс24", "Bitrix", "Bitrix24"],
@@ -221,7 +221,7 @@ S:\\Отдел_ДИ
 • пользоваться базой знаний.
 
 Открой Битрикс24 по ссылке:
-[https://bitrix.csdeskwork.ru/mainpage/]""",
+https://bitrix.csdeskwork.ru/mainpage/""",
     },
     {
         "keywords": ["база знаний", "инструкции"],
@@ -253,7 +253,7 @@ S:\\Отдел_ДИ
 • управлять кадровыми процессами.
 
 Ссылка для регистрации:
-[https://csmedica-1.ispring.ru/app/preview/e9cbc2fe-3af7-11f0-981f-26ff2eb195f0]""",
+https://csmedica-1.ispring.ru/app/preview/e9cbc2fe-3af7-11f0-981f-26ff2eb195f0""",
     },
     {
         "keywords": [
@@ -322,7 +322,7 @@ BestBenefits.
 • воспользоваться бонусами.
 
 Ссылка:
-[https://bestbenefits.ru/]""",
+https://bestbenefits.ru/""",
     },
    {
     "keywords": [
@@ -386,7 +386,7 @@ it-help@csmedica.ru""",
 через календарь Outlook.
 
 Инструкция по бронированию:
-[https://mirapolis.csdeskwork.ru/mira/s/LDxKVS]""",
+https://mirapolis.csdeskwork.ru/mira/s/LDxKVS""",
     },
     # =========================
     # РОЛЬ: РУКОВОДИТЕЛЬ ОТДЕЛА ИНТЕРНЕТ-МАРКЕТИНГА

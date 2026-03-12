@@ -1159,7 +1159,7 @@ def api_message(payload: MessageIn) -> Dict[str, Any]:
         session["department"] = text
         session["dialog_step"] = STATE_WAIT_POSITION
         return make_response(
-            "Понял! Теперь напиши, пожалуйста, свою должность.",
+            "Понял! Теперь напиши, пожалуйста, свою должность как в оффере.",
             [],
             STATE_WAIT_POSITION,
         )

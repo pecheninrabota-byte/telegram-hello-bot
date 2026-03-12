@@ -1,4 +1,6 @@
 import re
+import random
+from difflib import SequenceMatcher
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 
@@ -504,6 +506,17 @@ https://mirapolis.csdeskwork.ru/mira/s/LDxKVS""",
     },
     {
         "keywords": [
+            "кто мой руководитель",
+            "кто руководитель",
+            "кто у меня руководитель",
+            "мой руководитель",
+            "кому я подчиняюсь",
+            "кто мой начальник",
+        ],
+        "answer": """Для роли руководителя интернет-маркетинга непосредственным руководителем является директор по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай.""",
+    },
+    {
+        "keywords": [
             "кто ставит задачи руководителю интернет маркетинга",
             "кто ставит задачи руководителю",
             "кто ставит цели руководителю интернет маркетинга",
@@ -645,9 +658,10 @@ https://bitrix.csdeskwork.ru/knowledge/smezhnae%20otdeli/pererabotkaglstranitsyn
             "доступ к маркетинговым сервисам",
             "кто дает доступ к рекламным кабинетам",
             "как заказать доступ к сервисам маркетинга",
-            "доступы",
+            "маркетинговые сервисы",
+            "рекламные кабинеты",
         ],
-        "answer": """Если нужен доступ к рабочим сервисам, сначала уточни у непосредственного руководителя, какие именно системы нужны по роли.
+        "answer": """Если нужен доступ к рабочим сервисам маркетинга, сначала уточни у непосредственного руководителя, какие именно системы нужны по роли.
 
 Техническое оформление доступов обычно проходит через IT или администратора конкретной системы.""",
     },
@@ -667,8 +681,7 @@ https://bitrix.csdeskwork.ru/knowledge/smezhnae%20otdeli/pererabotkaglstranitsyn
     {
         "keywords": [
             "kpi интернет маркетинга",
-            "kpi",
-            "кпэ",
+            "кпэ интернет маркетинга",
             "показатели интернет маркетинга",
             "метрики интернет маркетинга",
             "по каким показателям оценивают интернет маркетинг",
@@ -1036,6 +1049,10 @@ def tokenize(text: str) -> List[str]:
     return [w for w in words if len(w) > 1 and w not in STOP_WORDS]
 
 
+def similar(a: str, b: str) -> float:
+    return SequenceMatcher(None, a, b).ratio()
+
+
 def score_keywords(query_text: str, keywords: List[str]) -> int:
     normalized_query = normalize(query_text)
     query_tokens = set(tokenize(query_text))
@@ -1064,6 +1081,16 @@ def score_keywords(query_text: str, keywords: List[str]) -> int:
         if len(keyword_tokens) == 1 and overlap == 1:
             score += 10
 
+        fuzzy_matches = 0
+        for q in query_tokens:
+            for k in keyword_tokens:
+                if q == k:
+                    continue
+                if similar(q, k) >= 0.80:
+                    fuzzy_matches += 1
+
+        score += fuzzy_matches * 10
+
         best_score = max(best_score, score)
 
     return best_score
@@ -1091,31 +1118,59 @@ def search_answer(text: str) -> Optional[str]:
 
 MANAGER_KEYWORDS = [
     "задач", "приоритет", "ответствен", "kpi", "кпэ", "результат",
-    "цель", "отчет", "отчетность", "бюджет", "согласован", "метрик"
+    "цель", "отчет", "отчетность", "бюджет", "согласован", "метрик",
+    "руководитель", "начальник", "подчиняюсь", "согласовать", "ожидания"
 ]
 
 HR_KEYWORDS = [
     "документ", "справка", "заявление", "отпуск", "больничн", "кадры",
-    "оформлен", "логин", "пароль", "1с", "outlook", "подпись"
+    "оформлен", "логин", "пароль", "1с", "outlook", "подпись",
+    "пропуск", "офис", "оформить", "hr"
 ]
 
-MANAGER_REPLY = "Понял! Тут лучше уточнить у твоего руководителя, это его зона ответственности."
+DEFAULT_REPLIES = [
+    "Давай разберёмся. Попробуй задать вопрос чуть подробнее. Например: «где расчетный лист», «как оформить отсутствие», «кто ставит задачи».",
+    "Пока не могу точно понять вопрос. Напиши его чуть подробнее или другими словами.",
+    "Не хочу ошибиться с ответом. Можешь уточнить вопрос? Например, про адаптацию, доступы, зарплату, курсы или роль.",
+]
+
 HR_REPLY = "Понял! Тут лучше обратиться к HR."
 DEFAULT_REPLY = "Давай разберёмся. Попробуй задать вопрос чуть подробнее, и я постараюсь помочь."
 
 
-def detect_fallback(text: str) -> str:
+def get_manager_name(session: Dict[str, Any]) -> str:
+    position = normalize(session.get("position", ""))
+    department = normalize(session.get("department", ""))
+    name = normalize(session.get("name", ""))
+
+    if "руководитель интернет маркетинга" in position:
+        return "директору по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай"
+
+    if "интернет маркетинга" in position:
+        return "директору по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай"
+
+    if "маркетинг" in department and name == "сергей":
+        return "директору по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай"
+
+    if "маркетинг" in department:
+        return "непосредственному руководителю подразделения"
+
+    return "твоему непосредственному руководителю"
+
+
+def detect_fallback(text: str, session: Dict[str, Any]) -> str:
     normalized_text = normalize(text)
+    manager_name = get_manager_name(session)
 
     for keyword in MANAGER_KEYWORDS:
         if keyword in normalized_text:
-            return MANAGER_REPLY
+            return f"Понял! Тут лучше уточнить у {manager_name}, это зона ответственности руководителя."
 
     for keyword in HR_KEYWORDS:
         if keyword in normalized_text:
-            return HR_REPLY
+            return "Понял! Тут лучше обратиться к HR. Если нужно, я могу подсказать контакты HR или IT."
 
-    return DEFAULT_REPLY
+    return random.choice(DEFAULT_REPLIES)
 
 
 # =========================
@@ -1310,6 +1365,6 @@ def api_message(payload: MessageIn) -> Dict[str, Any]:
         log_to_sheets(session, text, answer, True, "knowledge", STATE_IDLE)
         return make_response(answer, MAIN_MENU, STATE_IDLE)
 
-    fallback_reply = detect_fallback(text)
+    fallback_reply = detect_fallback(text, session)
     log_to_sheets(session, text, fallback_reply, False, "fallback", STATE_IDLE)
     return make_response(fallback_reply, MAIN_MENU, STATE_IDLE)

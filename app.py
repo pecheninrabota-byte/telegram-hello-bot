@@ -776,31 +776,36 @@ def score_keywords(query_text: str, keywords: List[str]) -> int:
 
     for keyword in keywords:
         keyword_norm = normalize(keyword)
+        keyword_tokens = set(tokenize(keyword_norm))
 
-        # 1. полное вхождение ключевой фразы
-        if keyword_norm in normalized_query:
-            best_score = max(best_score, 100)
+        if not keyword_tokens:
             continue
 
-        keyword_tokens = set(tokenize(keyword_norm))
-        if not keyword_tokens:
+        # 1. Полная фраза внутри вопроса
+        if len(keyword_tokens) >= 2 and keyword_norm in normalized_query:
+            best_score = max(best_score, 100)
             continue
 
         overlap = len(query_tokens & keyword_tokens)
 
-        # 2. совпали все слова ключа
-        if overlap == len(keyword_tokens) and overlap > 0:
-            best_score = max(best_score, 60)
+        # 2. Полностью совпал многословный keyword
+        if len(keyword_tokens) >= 2 and overlap == len(keyword_tokens):
+            best_score = max(best_score, 80)
             continue
 
-        # 3. совпала значимая часть слов
-        if len(keyword_tokens) >= 2 and overlap >= 2:
-            best_score = max(best_score, 35)
+        # 3. Совпали хотя бы 2 слова из многословного keyword
+        if len(keyword_tokens) >= 3 and overlap >= 2:
+            best_score = max(best_score, 45)
             continue
 
-        # 4. одно сильное совпадение для коротких ключей
+        # 4. Для двухсловных keywords — только полное совпадение обоих слов
+        if len(keyword_tokens) == 2 and overlap == 2:
+            best_score = max(best_score, 40)
+            continue
+
+        # 5. Однословные keywords почти не учитываем
         if len(keyword_tokens) == 1 and overlap == 1:
-            best_score = max(best_score, 20)
+            best_score = max(best_score, 5)
 
     return best_score
 
@@ -815,7 +820,7 @@ def search_answer(text: str) -> Optional[str]:
             best_score = score
             best_item = item
 
-    if best_item and best_score >= 20:
+    if best_item and best_score >= 40:
         return best_item["answer"]
 
     return None

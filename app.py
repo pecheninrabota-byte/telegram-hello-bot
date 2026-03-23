@@ -1,14 +1,14 @@
 import re
 import random
-from difflib import SequenceMatcher
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List
-
 import gspread
+from difflib import SequenceMatcher
+from datetime import datetime
+from typing import Dict, Any, Optional, List
+from oauth2client.service_account import ServiceAccountCredentials
+
 import requests
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from oauth2client.service_account import ServiceAccountCredentials
 from pydantic import BaseModel
 
 app = FastAPI(title="CS Medica HR Assistant API")
@@ -36,11 +36,6 @@ GOOGLE_CREDENTIALS_FILE = "credentials.json"
 
 sessions: Dict[str, Dict[str, Any]] = {}
 
-# Кэш для таблицы знаний, чтобы не тянуть Google Sheets на каждый вопрос
-sheet_kb_cache: List[Dict[str, Any]] = []
-sheet_kb_cache_updated_at: Optional[datetime] = None
-SHEET_CACHE_TTL_SECONDS = 120
-
 
 class MessageIn(BaseModel):
     session_id: str
@@ -52,7 +47,7 @@ def now_str() -> str:
 
 
 def normalize(text: str) -> str:
-    text = str(text).lower().replace("ё", "е")
+    text = text.lower().replace("ё", "е")
     text = re.sub(r"[^\w\s:\\/@.\-–—]", " ", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
@@ -93,19 +88,7 @@ def log_to_sheets(
         print("Sheets log error:", e)
 
 
-def load_sheet_kb(force: bool = False) -> List[Dict[str, Any]]:
-    global sheet_kb_cache, sheet_kb_cache_updated_at
-
-    now = datetime.now()
-    cache_is_valid = (
-        not force
-        and sheet_kb_cache_updated_at is not None
-        and (now - sheet_kb_cache_updated_at) < timedelta(seconds=SHEET_CACHE_TTL_SECONDS)
-    )
-
-    if cache_is_valid:
-        return sheet_kb_cache
-
+def load_sheet_kb() -> List[Dict[str, Any]]:
     try:
         scope = [
             "https://spreadsheets.google.com/feeds",
@@ -117,13 +100,130 @@ def load_sheet_kb(force: bool = False) -> List[Dict[str, Any]]:
         client = gspread.authorize(creds)
         worksheet = client.open(GOOGLE_SHEETS_NAME).worksheet(GOOGLE_SHEETS_KB_WORKSHEET)
         records = worksheet.get_all_records()
-
-        sheet_kb_cache = records
-        sheet_kb_cache_updated_at = now
         return records
     except Exception as e:
         print("KB load error:", e)
-        return sheet_kb_cache if sheet_kb_cache else []
+        return []
+
+
+# =========================
+# ПОИСК
+# =========================
+
+STOP_WORDS = {
+    "как", "где", "что", "это", "у", "в", "на", "по", "и", "или",
+    "мне", "мой", "моя", "мое", "с", "к", "для", "а", "но", "ли",
+    "же", "про", "под", "из", "от", "до", "не", "ну", "если",
+    "нужно", "надо", "можно", "хочу", "хотел", "подскажи", "скажите",
+    "пожалуйста", "расскажи", "помоги", "могу", "будет", "есть"
+}
+
+
+def tokenize(text: str) -> List[str]:
+    words = re.findall(r"[a-zа-я0-9]+", normalize(text))
+    return [w for w in words if len(w) > 1 and w not in STOP_WORDS]
+
+
+def similar(a: str, b: str) -> float:
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def score_keywords(query_text: str, keywords: List[str]) -> int:
+    normalized_query = normalize(query_text)
+    query_tokens = set(tokenize(query_text))
+    best_score = 0
+
+    for keyword in keywords:
+        keyword_norm = normalize(keyword)
+        keyword_tokens = set(tokenize(keyword))
+        if not keyword_tokens:
+            continue
+
+        score = 0
+
+        if keyword_norm == normalized_query:
+            score += 120
+
+        if keyword_norm in normalized_query and len(keyword_norm) >= 6:
+            score += 80
+
+        overlap = len(query_tokens & keyword_tokens)
+        score += overlap * 15
+
+        if len(keyword_tokens) >= 2 and keyword_tokens.issubset(query_tokens):
+            score += 30
+
+        if len(keyword_tokens) == 1 and overlap == 1:
+            score += 10
+
+        fuzzy_matches = 0
+        for q in query_tokens:
+            for k in keyword_tokens:
+                if q == k:
+                    continue
+                if similar(q, k) >= 0.80:
+                    fuzzy_matches += 1
+
+        score += fuzzy_matches * 10
+
+        best_score = max(best_score, score)
+
+    return best_score
+
+
+def score_sheet_row(query_text: str, row: Dict[str, Any]) -> int:
+    raw_question = str(row.get("Вопрос сотрудника (как есть)", "")).strip()
+    normalized_question = str(row.get("Нормализованный вопрос", "")).strip()
+    keywords_raw = str(row.get("Ключевые слова", "")).strip()
+    status = str(row.get("Статус", "")).strip().lower()
+
+    if status and status not in {"ready", "added", "reviewed"}:
+        return 0
+
+    candidates: List[str] = []
+    if raw_question:
+        candidates.append(raw_question)
+    if normalized_question:
+        candidates.append(normalized_question)
+
+    keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()]
+
+    best_score = 0
+
+    for candidate in candidates:
+        score = score_keywords(query_text, [candidate])
+        best_score = max(best_score, score)
+
+    if keywords:
+        score = score_keywords(query_text, keywords)
+        best_score = max(best_score, score)
+
+    return best_score
+
+
+def search_sheet_answer(text: str) -> Optional[Dict[str, Any]]:
+    rows = load_sheet_kb()
+    if not rows:
+        return None
+
+    best_row = None
+    best_score = 0
+
+    for row in rows:
+        score = score_sheet_row(text, row)
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_row and best_score >= 20:
+        return {
+            "answer": str(best_row.get("Ответ бота", "")).strip(),
+            "intent": str(best_row.get("Intent ID", "")).strip(),
+            "type": str(best_row.get("Тип ответа", "kb")).strip().lower() or "kb",
+            "score": best_score,
+        }
+
+    return None
 
 
 # =========================
@@ -522,11 +622,6 @@ it-help@csmedica.ru""",
 Инструкция по бронированию:
 https://mirapolis.csdeskwork.ru/mira/s/LDxKVS""",
     },
-
-    # =========================
-    # РОЛЬ: РУКОВОДИТЕЛЬ ИНТЕРНЕТ-МАРКЕТИНГА
-    # =========================
-
     {
         "keywords": [
             "руководитель интернет маркетинга",
@@ -1073,137 +1168,18 @@ for item in KNOWLEDGE_BASE:
     item["normalized_keywords"] = [normalize(k) for k in item["keywords"]]
 
 
-# =========================
-# ПОИСК
-# =========================
-
-STOP_WORDS = {
-    "как", "где", "что", "это", "у", "в", "на", "по", "и", "или",
-    "мне", "мой", "моя", "мое", "с", "к", "для", "а", "но", "ли",
-    "же", "про", "под", "из", "от", "до", "не", "ну", "если",
-    "нужно", "надо", "можно", "хочу", "хотел", "подскажи", "скажите",
-    "пожалуйста", "расскажи", "помоги", "могу", "будет", "есть"
-}
-
-
-def tokenize(text: str) -> List[str]:
-    words = re.findall(r"[a-zа-я0-9]+", normalize(text))
-    return [w for w in words if len(w) > 1 and w not in STOP_WORDS]
-
-
-def similar(a: str, b: str) -> float:
-    return SequenceMatcher(None, a, b).ratio()
-
-
-def score_keywords(query_text: str, keywords: List[str]) -> int:
-    normalized_query = normalize(query_text)
-    query_tokens = set(tokenize(query_text))
-    best_score = 0
-
-    for keyword in keywords:
-        keyword_norm = normalize(keyword)
-        keyword_tokens = set(tokenize(keyword))
-        if not keyword_tokens:
-            continue
-
-        score = 0
-
-        if keyword_norm == normalized_query:
-            score += 120
-
-        if keyword_norm in normalized_query and len(keyword_norm) >= 6:
-            score += 80
-
-        overlap = len(query_tokens & keyword_tokens)
-        score += overlap * 15
-
-        if len(keyword_tokens) >= 2 and keyword_tokens.issubset(query_tokens):
-            score += 30
-
-        if len(keyword_tokens) == 1 and overlap == 1:
-            score += 10
-
-        fuzzy_matches = 0
-        for q in query_tokens:
-            for k in keyword_tokens:
-                if q == k:
-                    continue
-                if similar(q, k) >= 0.80:
-                    fuzzy_matches += 1
-
-        score += fuzzy_matches * 10
-        best_score = max(best_score, score)
-
-    return best_score
-
-
 def search_answer(text: str) -> Optional[str]:
     best_item = None
     best_score = 0
 
     for item in KNOWLEDGE_BASE:
-        score = score_keywords(text, item["normalized_keywords"])
+        score = score_keywords(text, item["keywords"])
         if score > best_score:
             best_score = score
             best_item = item
 
     if best_item and best_score >= 20:
         return best_item["answer"]
-
-    return None
-
-
-def score_sheet_row(query_text: str, row: Dict[str, Any]) -> int:
-    raw_question = str(row.get("Вопрос сотрудника (как есть)", "")).strip()
-    normalized_question = str(row.get("Нормализованный вопрос", "")).strip()
-    keywords_raw = str(row.get("Ключевые слова", "")).strip()
-    status = str(row.get("Статус", "")).strip().lower()
-
-    if status and status not in {"ready", "added", "reviewed"}:
-        return 0
-
-    candidates: List[str] = []
-    if raw_question:
-        candidates.append(raw_question)
-    if normalized_question:
-        candidates.append(normalized_question)
-
-    keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()]
-
-    best_score = 0
-
-    for candidate in candidates:
-        score = score_keywords(query_text, [candidate])
-        best_score = max(best_score, score)
-
-    if keywords:
-        score = score_keywords(query_text, keywords)
-        best_score = max(best_score, score)
-
-    return best_score
-
-
-def search_sheet_answer(text: str) -> Optional[Dict[str, Any]]:
-    rows = load_sheet_kb()
-    if not rows:
-        return None
-
-    best_row = None
-    best_score = 0
-
-    for row in rows:
-        score = score_sheet_row(text, row)
-        if score > best_score:
-            best_score = score
-            best_row = row
-
-    if best_row and best_score >= 20:
-        return {
-            "answer": str(best_row.get("Ответ бота", "")).strip(),
-            "intent": str(best_row.get("Intent ID", "")).strip(),
-            "type": str(best_row.get("Тип ответа", "kb")).strip().lower() or "kb",
-            "score": best_score,
-        }
 
     return None
 
@@ -1234,17 +1210,21 @@ DEFAULT_REPLIES = [
 def get_manager_name(session: Dict[str, Any]) -> str:
     position = normalize(session.get("position", ""))
     department = normalize(session.get("department", ""))
+    name = normalize(session.get("name", ""))
 
     if "руководитель интернет маркетинга" in position:
-        return "директора по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай"
+        return "директору по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай"
 
     if "интернет маркетинга" in position:
-        return "директора по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай"
+        return "директору по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай"
+
+    if "маркетинг" in department and name == "сергей":
+        return "директору по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай"
 
     if "маркетинг" in department:
-        return "непосредственного руководителя подразделения"
+        return "непосредственному руководителю подразделения"
 
-    return "твоего непосредственного руководителя"
+    return "твоему непосредственному руководителю"
 
 
 def detect_fallback(text: str, session: Dict[str, Any]) -> str:
@@ -1385,7 +1365,6 @@ def root() -> Dict[str, str]:
 def api_message(payload: MessageIn) -> Dict[str, Any]:
     session_id = payload.session_id.strip()
     text = payload.text.strip()
-
     session = get_session(session_id)
     session["updated_at"] = now_str()
 

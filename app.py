@@ -1,12 +1,14 @@
 import re
 import random
 from difflib import SequenceMatcher
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 
+import gspread
 import requests
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from oauth2client.service_account import ServiceAccountCredentials
 from pydantic import BaseModel
 
 app = FastAPI(title="CS Medica HR Assistant API")
@@ -28,8 +30,16 @@ STATE_WAIT_POSITION = "wait_position"
 STATE_IDLE = "idle"
 
 GOOGLE_SHEETS_WEBHOOK = "https://script.google.com/macros/s/AKfycbxi2sXker_ofkg_DyQvwnIrNJuFcsCnB_qHlBwUwBJ9GFA59fhELEsdZag18Sb6kEzsEg/exec"
+GOOGLE_SHEETS_NAME = "HR Bot Analytics"
+GOOGLE_SHEETS_KB_WORKSHEET = "Обучение бота"
+GOOGLE_CREDENTIALS_FILE = "credentials.json"
 
 sessions: Dict[str, Dict[str, Any]] = {}
+
+# Кэш для таблицы знаний, чтобы не тянуть Google Sheets на каждый вопрос
+sheet_kb_cache: List[Dict[str, Any]] = []
+sheet_kb_cache_updated_at: Optional[datetime] = None
+SHEET_CACHE_TTL_SECONDS = 120
 
 
 class MessageIn(BaseModel):
@@ -42,7 +52,7 @@ def now_str() -> str:
 
 
 def normalize(text: str) -> str:
-    text = text.lower().replace("ё", "е")
+    text = str(text).lower().replace("ё", "е")
     text = re.sub(r"[^\w\s:\\/@.\-–—]", " ", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
@@ -83,10 +93,42 @@ def log_to_sheets(
         print("Sheets log error:", e)
 
 
+def load_sheet_kb(force: bool = False) -> List[Dict[str, Any]]:
+    global sheet_kb_cache, sheet_kb_cache_updated_at
+
+    now = datetime.now()
+    cache_is_valid = (
+        not force
+        and sheet_kb_cache_updated_at is not None
+        and (now - sheet_kb_cache_updated_at) < timedelta(seconds=SHEET_CACHE_TTL_SECONDS)
+    )
+
+    if cache_is_valid:
+        return sheet_kb_cache
+
+    try:
+        scope = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = ServiceAccountCredentials.from_json_keyfile_name(
+            GOOGLE_CREDENTIALS_FILE, scope
+        )
+        client = gspread.authorize(creds)
+        worksheet = client.open(GOOGLE_SHEETS_NAME).worksheet(GOOGLE_SHEETS_KB_WORKSHEET)
+        records = worksheet.get_all_records()
+
+        sheet_kb_cache = records
+        sheet_kb_cache_updated_at = now
+        return records
+    except Exception as e:
+        print("KB load error:", e)
+        return sheet_kb_cache if sheet_kb_cache else []
+
+
 # =========================
 # БАЗА ЗНАНИЙ
 # =========================
-
 KNOWLEDGE_BASE = [
     {
         "keywords": [
@@ -1090,7 +1132,6 @@ def score_keywords(query_text: str, keywords: List[str]) -> int:
                     fuzzy_matches += 1
 
         score += fuzzy_matches * 10
-
         best_score = max(best_score, score)
 
     return best_score
@@ -1101,13 +1142,68 @@ def search_answer(text: str) -> Optional[str]:
     best_score = 0
 
     for item in KNOWLEDGE_BASE:
-        score = score_keywords(text, item["keywords"])
+        score = score_keywords(text, item["normalized_keywords"])
         if score > best_score:
             best_score = score
             best_item = item
 
     if best_item and best_score >= 20:
         return best_item["answer"]
+
+    return None
+
+
+def score_sheet_row(query_text: str, row: Dict[str, Any]) -> int:
+    raw_question = str(row.get("Вопрос сотрудника (как есть)", "")).strip()
+    normalized_question = str(row.get("Нормализованный вопрос", "")).strip()
+    keywords_raw = str(row.get("Ключевые слова", "")).strip()
+    status = str(row.get("Статус", "")).strip().lower()
+
+    if status and status not in {"ready", "added", "reviewed"}:
+        return 0
+
+    candidates: List[str] = []
+    if raw_question:
+        candidates.append(raw_question)
+    if normalized_question:
+        candidates.append(normalized_question)
+
+    keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()]
+
+    best_score = 0
+
+    for candidate in candidates:
+        score = score_keywords(query_text, [candidate])
+        best_score = max(best_score, score)
+
+    if keywords:
+        score = score_keywords(query_text, keywords)
+        best_score = max(best_score, score)
+
+    return best_score
+
+
+def search_sheet_answer(text: str) -> Optional[Dict[str, Any]]:
+    rows = load_sheet_kb()
+    if not rows:
+        return None
+
+    best_row = None
+    best_score = 0
+
+    for row in rows:
+        score = score_sheet_row(text, row)
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_row and best_score >= 20:
+        return {
+            "answer": str(best_row.get("Ответ бота", "")).strip(),
+            "intent": str(best_row.get("Intent ID", "")).strip(),
+            "type": str(best_row.get("Тип ответа", "kb")).strip().lower() or "kb",
+            "score": best_score,
+        }
 
     return None
 
@@ -1134,28 +1230,21 @@ DEFAULT_REPLIES = [
     "Не хочу ошибиться с ответом. Можешь уточнить вопрос? Например, про адаптацию, доступы, зарплату, курсы или роль.",
 ]
 
-HR_REPLY = "Понял! Тут лучше обратиться к HR."
-DEFAULT_REPLY = "Давай разберёмся. Попробуй задать вопрос чуть подробнее, и я постараюсь помочь."
-
 
 def get_manager_name(session: Dict[str, Any]) -> str:
     position = normalize(session.get("position", ""))
     department = normalize(session.get("department", ""))
-    name = normalize(session.get("name", ""))
 
     if "руководитель интернет маркетинга" in position:
-        return "директору по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай"
+        return "директора по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай"
 
     if "интернет маркетинга" in position:
-        return "директору по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай"
-
-    if "маркетинг" in department and name == "сергей":
-        return "директору по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай"
+        return "директора по маркетингу. По ряду задач также участвует Операционный директор Литвинко Николай"
 
     if "маркетинг" in department:
-        return "непосредственному руководителю подразделения"
+        return "непосредственного руководителя подразделения"
 
-    return "твоему непосредственному руководителю"
+    return "твоего непосредственного руководителя"
 
 
 def detect_fallback(text: str, session: Dict[str, Any]) -> str:
@@ -1296,6 +1385,7 @@ def root() -> Dict[str, str]:
 def api_message(payload: MessageIn) -> Dict[str, Any]:
     session_id = payload.session_id.strip()
     text = payload.text.strip()
+
     session = get_session(session_id)
     session["updated_at"] = now_str()
 
@@ -1359,6 +1449,12 @@ def api_message(payload: MessageIn) -> Dict[str, Any]:
             menu_response["state"],
         )
         return menu_response
+
+    sheet_result = search_sheet_answer(text)
+    if sheet_result and sheet_result["answer"]:
+        route = f"sheet_kb:{sheet_result['intent']}" if sheet_result["intent"] else "sheet_kb"
+        log_to_sheets(session, text, sheet_result["answer"], True, route, STATE_IDLE)
+        return make_response(sheet_result["answer"], MAIN_MENU, STATE_IDLE)
 
     answer = search_answer(text)
     if answer:

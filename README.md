@@ -1,1 +1,1 @@
-# HR Bot
+# hr-bot

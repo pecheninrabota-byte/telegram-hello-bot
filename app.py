@@ -293,7 +293,7 @@ def api_message(payload: MessageIn):
         session["state"] = STATE_WAIT_NAME
         session["current_section"] = None
         return make_response(
-            "Привет! Я СиЭс — HR-ассистент 👋\n\n"
+            "Привет! Я Добрыня — твой HR-ассистент 👋\n\n"
             "Помогу тебе найти ответы по внутренним вопросам: ДМС, отгулы, обучение и другое.\n\n"
             "Давай начнем — как тебя зовут?",
             [],

@@ -17,6 +17,7 @@ app.add_middleware(
 
 STATE_WAIT_NAME = "wait_name"
 STATE_IDLE = "idle"
+STATE_FREE_INPUT = "free_input"  # режим свободного ввода
 
 sessions: Dict[str, Dict[str, Any]] = {}
 
@@ -205,6 +206,27 @@ https://csmedica.1c-cabinet.ru/auth/v2/server/signin?app_req_id=4ebc66c4-c0ef-42
 
 SMALL_TALK = {"привет", "ок", "спасибо"}
 
+# Ключевые слова для поиска ответа по разделам
+KEYWORDS = {
+    "ДМС": ["полис", "дмс", "анализы", "врач", "клиника", "лечение", "больница", "ингосстрах"],
+    "Магазин подарков": ["бонус", "магазин", "подарок", "сертификат", "озон", "списать", "накопить"],
+    "Отгулы": ["отгул", "остаток", "сгорел", "сгорят", "выйти"],
+    "Корпоративный университет": ["ку", "обучение", "курс", "университет", "знания"],
+    "HighPer": ["highper", "kpi", "показатель", "эффективность"],
+    "1С личный кабинет": ["1с", "кадры", "документ", "подпись", "приказ", "кабинет"]
+}
+
+# Контакты специалистов
+CONTACTS = {
+    "ДМС": "по ДМС можно обратиться к Светлане Климовой",
+    "Магазин подарков": "по бонусной программе — к Марии Вольф",
+    "Отгулы": "по отгулам — к руководителю или в отдел кадров",
+    "Корпоративный университет": "по обучению — к Ефремовой Надежде",
+    "HighPer": "по HighPer — к руководителю или в отдел методологии",
+    "1С личный кабинет": "по 1С — в службу поддержки или к кадровикам",
+    "default": "напиши в отдел кадров или своему руководителю"
+}
+
 
 class MessageIn(BaseModel):
     session_id: str | None = None
@@ -222,13 +244,32 @@ def get_session(session_id):
             "session_id": session_id,
             "name": "",
             "state": STATE_WAIT_NAME,
-            "context": None,
+            "current_section": None,
         }
     return sessions[session_id]
 
 
 def normalize(text):
     return re.sub(r"\s+", " ", text.lower()).strip()
+
+
+def find_answer_by_keywords(question: str):
+    """Ищет подходящий ответ по ключевым словам в вопросах из ANSWERS"""
+    question_lower = question.lower()
+    
+    # Прямое совпадение
+    for q in ANSWERS:
+        if q.lower() in question_lower or question_lower in q.lower():
+            return ANSWERS[q], None
+    
+    # Поиск по ключевым словам раздела
+    for section, keywords in KEYWORDS.items():
+        for kw in keywords:
+            if kw in question_lower:
+                # Нашли раздел, возвращаем контакт специалиста
+                return None, CONTACTS.get(section, CONTACTS["default"])
+    
+    return None, CONTACTS["default"]
 
 
 @app.get("/")
@@ -244,6 +285,7 @@ def api_message(payload: MessageIn):
 
     if text == "__start__":
         session["state"] = STATE_WAIT_NAME
+        session["current_section"] = None
         return make_response(
             "Привет! Я СиЭс — HR-ассистент 👋\n\n"
             "Помогу тебе найти ответы по внутренним вопросам: ДМС, отгулы, обучение и другое.\n\n"
@@ -255,19 +297,61 @@ def api_message(payload: MessageIn):
     if session["state"] == STATE_WAIT_NAME:
         session["name"] = text
         session["state"] = STATE_IDLE
+        session["current_section"] = None
         return make_response(f"{text}, выбери тему 👇", MAIN_MENU, STATE_IDLE)
 
     if normalize(text) in SMALL_TALK:
         return make_response("Давай посмотрим 👇", MAIN_MENU, STATE_IDLE)
 
+    # Обработка кнопки "Главное меню"
     if text == "Главное меню":
+        session["current_section"] = None
+        session["state"] = STATE_IDLE
         return make_response("Выбери тему 👇", MAIN_MENU, STATE_IDLE)
 
+    # Если выбрана тема из главного меню
     if text in MAIN_MENU:
-        session["context"] = text
+        # Если выбрана кнопка "Не нашёл ответ" — переходим в режим свободного ввода
+        if text == "Не нашёл ответ":
+            session["state"] = STATE_FREE_INPUT
+            return make_response(
+                "Напиши свой вопрос текстом, я поищу ответ или подскажу, к кому обратиться 👇\n\n"
+                "Можешь написать: как накопить бонусы, что такое HighPer, где найти номер полиса и т.д.",
+                [],
+                STATE_FREE_INPUT
+            )
+        
+        session["current_section"] = text
+        session["state"] = STATE_IDLE
         return make_response("Выбери вопрос 👇", SUB_MENUS.get(text, []), STATE_IDLE)
 
+    # Режим свободного ввода
+    if session["state"] == STATE_FREE_INPUT:
+        answer, contact = find_answer_by_keywords(text)
+        
+        if answer:
+            # Нашли готовый ответ — показываем его и возвращаем в текущий раздел
+            if session["current_section"]:
+                section_menu = SUB_MENUS.get(session["current_section"], MAIN_MENU)
+                session["state"] = STATE_IDLE
+                return make_response(answer, section_menu, STATE_IDLE)
+            else:
+                session["state"] = STATE_IDLE
+                return make_response(answer, MAIN_MENU, STATE_IDLE)
+        else:
+            # Не нашли ответ — даем контакт специалиста и возвращаем в меню
+            session["state"] = STATE_IDLE
+            reply = f"Не смог найти точный ответ на твой вопрос 😔\n\nНо я знаю, кто поможет: {contact}\n\nВыбери тему из меню 👇"
+            if session["current_section"]:
+                section_menu = SUB_MENUS.get(session["current_section"], MAIN_MENU)
+                return make_response(reply, section_menu, STATE_IDLE)
+            return make_response(reply, MAIN_MENU, STATE_IDLE)
+
+    # Если вопрос из ANSWERS в обычном режиме
     if text in ANSWERS:
+        if session["current_section"]:
+            section_menu = SUB_MENUS.get(session["current_section"], MAIN_MENU)
+            return make_response(ANSWERS[text], section_menu, STATE_IDLE)
         return make_response(ANSWERS[text], MAIN_MENU, STATE_IDLE)
 
     return make_response("Пока не понял вопрос 🤔 Попробуй выбрать из меню 👇", MAIN_MENU, STATE_IDLE)
